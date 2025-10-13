@@ -27,7 +27,7 @@ impl SpellEngine {
     }
 }
 
-fn byte_word_ranges(s: &str) -> Vec<(usize, usize)> {
+fn byte_word_ranges(s: &str) -> Vec<(usize, usize)> {//aa
     let mut res = Vec::new();
     let mut in_word = false;
     let mut start = 0usize;
