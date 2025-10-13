@@ -8,11 +8,13 @@ use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
+use helix_core::editor_config;
 use helix_core::encoding::Encoding;
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
 use helix_event::TaskController;
+use helix_loader::grammar::get_language;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
@@ -695,6 +697,14 @@ where
 
 use helix_lsp::{lsp, Client, LanguageServerId, LanguageServerName};
 use url::Url;
+
+//spellchecker
+use helix_core::diagnostic::DiagnosticTag;
+use helix_core::diagnostic::Range as DiagRange;
+use helix_core::diagnostic::Severity;
+use helix_core::spell_check::SpellChecker;
+use helix_core::tree_sitter::{self, Grammar, Query, QueryCursor};
+use serde_json::json;
 
 impl Document {
     pub fn from(
@@ -2402,6 +2412,92 @@ impl Document {
 
         process.buffered_chars = 0;
         true
+    }
+
+    pub fn check_spell(&mut self) {
+        let Some(syntax) = &self.syntax else {
+            return;
+        };
+
+        let tree = syntax.tree();
+        let root = tree.root_node();
+
+        let mut keep: Vec<Diagnostic> = self
+            .diagnostics()
+            .iter()
+            .cloned()
+            .filter(|d| d.source.as_deref() != Some("spellcheck"))
+            .collect();
+
+        let aff = std::fs::read_to_string("./runtime/dicts/en/index.aff").unwrap();
+        let dic = std::fs::read_to_string("./runtime/dicts/en/index.dic").unwrap();
+        let spell = helix_core::spell_check::SpellChecker::new(&aff, &dic)
+            .expect("failed to parse dictionary");
+        let mut spell_diags = Vec::new();
+
+        fn walk_tree<F>(node: &tree_sitter::Node, in_declaration: bool, f: &mut F)
+        where
+            F: FnMut(tree_sitter::Node, bool),
+        {
+            f(node.clone(), in_declaration);
+            let in_decl = in_declaration
+                || matches!(
+                    node.kind(),
+                    "let_declaration" | "func_declaration" | "field_declaration"
+                );
+            for child in node.children() {
+                walk_tree(&child, in_decl, f);
+            }
+        }
+
+        walk_tree(&root, false, &mut |node, in_decl| {
+            let kind = node.kind();
+
+            if kind == "line_comment" || kind == "doc_comment" || (kind == "identifier" && in_decl)
+            {
+                //kind == "identifier" {
+                let br = node.byte_range();
+                let slice = self
+                    .text
+                    .slice(br.start as usize..br.end as usize)
+                    .to_string();
+
+                //log::warn!("{slice}");
+                log::warn!("{kind}");
+
+                for (start, end, sug) in spell.check_text(&slice) {
+                    let abs_start = br.start as usize + start;
+                    let abs_end = br.start as usize + end;
+
+                    let start_char = self.text.byte_to_char(abs_start);
+                    let line = self.text.char_to_line(start_char);
+
+                    spell_diags.push(Diagnostic {
+                        range: DiagRange {
+                            start: abs_start,
+                            end: abs_end,
+                        },
+                        line,
+                        message: format!("Possibly misspelled word. Suggestion: {}", sug),
+                        severity: Some(Severity::Warning),
+                        code: None,
+                        tags: vec![DiagnosticTag::Deprecated],
+                        source: Some("spellcheck".to_string()),
+                        data: Some(json!({
+                            "suggestions": [sug],
+                            "lang": "en-US"
+                        })),
+                        provider: DiagnosticProvider::SpellChecker,
+                        ends_at_word: true,
+                        starts_at_word: true,
+                        zero_width: false,
+                    });
+                }
+            }
+        });
+
+        keep.extend(spell_diags);
+        self.replace_diagnostics(keep, &[], None);
     }
 }
 

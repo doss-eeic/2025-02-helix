@@ -20,6 +20,9 @@ helix-stdx = { path = "../helix-stdx" }
 helix-loader = { path = "../helix-loader" }
 helix-parsec = { path = "../helix-parsec" }
 
+# spell cheker
+spellbook = "0.3.5"
+
 ropey.workspace = true
 smallvec = "1.15"
 smartstring = "1.0.1"

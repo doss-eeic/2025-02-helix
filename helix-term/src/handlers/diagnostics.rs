@@ -234,7 +234,7 @@ fn request_document_diagnostics_for_language_severs(
                         retry_language_servers.insert(server_id);
                     }
                 }
-                Some(None) => break,
+                Some(_) => break,
                 // The request was cancelled.
                 None => return,
             }

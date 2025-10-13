@@ -17,6 +17,12 @@ use helix_view::expansion;
 use serde_json::Value;
 use ui::completers::{self, Completer};
 
+//spellchecker
+use crate::compositor;
+use crate::ui;
+use anyhow::Result;
+use helix_core::command_line;
+
 #[derive(Clone)]
 pub struct TypableCommand {
     pub name: &'static str,
@@ -2701,6 +2707,20 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
     Ok(())
 }
 
+pub fn spell_check(
+    cx: &mut compositor::Context,
+    _args: command_line::Args,
+    event: ui::prompt::PromptEvent,
+) -> Result<()> {
+    if !matches!(event, PromptEvent::Validate) {
+        return Ok(());
+    }
+    let (view, doc) = current!(cx.editor);
+    doc.check_spell();
+    cx.editor.set_status("Spellcheck completed");
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -3761,6 +3781,18 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             positionals: (0, None),
             ..SHELL_SIGNATURE
         },
+    },
+    TypableCommand {
+        name: "spell-check",
+        aliases: &[],
+        doc: "Spell Checker",
+        fun: spell_check,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+
     },
 ];
 
