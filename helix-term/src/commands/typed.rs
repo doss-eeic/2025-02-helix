@@ -2678,6 +2678,24 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
+//spellchecker
+
+use crate::args;
+use crate::compositor;
+use crate::ui;
+use anyhow::Result;
+use helix_core::command_line;
+
+pub fn command_spellcheck(
+    cx: &mut compositor::Context,
+    _args: command_line::Args,
+    _event: ui::prompt::PromptEvent,
+) -> Result<()> {
+    let (view, doc) = current!(cx.editor);
+    doc.run_spellcheck();
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -3727,6 +3745,18 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             positionals: (0, None),
             ..Signature::DEFAULT
         },
+    },
+    TypableCommand {
+        name: "spellcheck",
+        aliases: &[],
+        doc: "Spell Checker",
+        fun: command_spellcheck,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+
     },
 ];
 

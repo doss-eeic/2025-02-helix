@@ -34,6 +34,9 @@ mod transaction;
 pub mod uri;
 pub mod wrap;
 
+//spellchecker
+pub mod spellchecker;
+
 pub mod unicode {
     pub use unicode_general_category as category;
     pub use unicode_segmentation as segmentation;

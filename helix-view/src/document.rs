@@ -682,6 +682,9 @@ where
 use helix_lsp::{lsp, Client, LanguageServerId, LanguageServerName};
 use url::Url;
 
+//spellchecker
+use helix_core::spellchecker::SpellEngine;
+
 impl Document {
     pub fn from(
         text: Rope,
@@ -2292,6 +2295,41 @@ impl Document {
 
     pub fn has_language_server_with_feature(&self, feature: LanguageServerFeature) -> bool {
         self.language_servers_with_feature(feature).next().is_some()
+    }
+
+    //spellchecker
+    pub fn run_spellcheck(&self) {
+        let Some(syntax) = &self.syntax else {
+            return;
+        };
+        let tree = syntax.tree();
+        let root = tree.root_node();
+
+        let aff = std::fs::read_to_string("./vendor/en_US/en_US.aff").unwrap();
+        let dic = std::fs::read_to_string("./vendor/en_US/en_US.dic").unwrap();
+        let spell = helix_core::spellchecker::SpellEngine::new(&aff, &dic)
+            .expect("failed to parse dictionary");
+
+        for node in root.children() {
+            let kind = node.kind();
+            if kind == "comment" || kind == "string_literal" {
+                let byte_range = node.byte_range();
+                let slice = self
+                    .text
+                    .slice(byte_range.start as usize..byte_range.end as usize)
+                    .to_string();
+
+                let results = spell.check_text(&slice);
+                for (start, end, sug) in results {
+                    println!(
+                        "Misspelled: {:?} → {:?} ({:?})",
+                        &slice[start..end],
+                        sug,
+                        kind
+                    );
+                }
+            }
+        }
     }
 }
 
