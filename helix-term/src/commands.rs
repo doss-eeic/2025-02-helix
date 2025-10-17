@@ -4152,16 +4152,27 @@ pub mod insert {
         let (view, doc) = current_ref!(cx.editor);
         let text = doc.text();
         let selection = doc.selection(view.id);
-        let auto_pairs = doc.auto_pairs(cx.editor);
 
-        let transaction = auto_pairs
-            .as_ref()
-            .and_then(|ap| auto_pairs::hook(text, selection, c, ap))
-            .or_else(|| insert(text, selection, c));
+        let transaction = if cx.editor.has_process(doc.id()) {
+            let auto_pairs = doc.auto_pairs(cx.editor);
 
+            let transaction = auto_pairs
+                .as_ref()
+                .and_then(|ap| auto_pairs::hook(text, selection, c, ap));
+
+            transaction
+        } else {
+            Option::None
+        };
+
+        let transaction = transaction.or_else(|| insert(text, selection, c));
         let (view, doc) = current!(cx.editor);
         if let Some(t) = transaction {
             doc.apply(&t, view.id);
+        }
+
+        if let Some((_, stdin_sender)) = cx.editor.processes.get(&doc.id()) {
+            _ = stdin_sender.send(format!("{c}"));
         }
 
         helix_event::dispatch(PostInsertChar { c, cx });

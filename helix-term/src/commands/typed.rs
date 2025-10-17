@@ -12,7 +12,7 @@ use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
-use helix_view::editor::{CloseError, ConfigEvent};
+use helix_view::editor::{AttachProcessError, CloseError, ConfigEvent};
 use helix_view::expansion;
 use serde_json::Value;
 use ui::completers::{self, Completer};
@@ -2678,6 +2678,27 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
+fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let doc_id = cx.editor.new_file_from_document(
+        Action::Replace,
+        Document::default(cx.editor.config.clone(), cx.editor.syn_loader.clone()).make_be_term(),
+    );
+
+    if let Err(error) = cx.editor.attach_process(doc_id, args) {
+        match error {
+            AttachProcessError::AlreadyAttached => bail!("error process already attached"),
+            AttachProcessError::ProgramNotSpecified => bail!("specify a program"),
+            AttachProcessError::CannotSpawn(error) => bail!("error: {error:?}"),
+        }
+    }
+
+    Ok(())
+}
+
 /// This command accepts a single boolean --skip-visible flag and no positionals.
 const BUFFER_CLOSE_OTHERS_SIGNATURE: Signature = Signature {
     positionals: (0, Some(0)),
@@ -3727,6 +3748,14 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             positionals: (0, None),
             ..Signature::DEFAULT
         },
+    },
+    TypableCommand {
+        name: "terminal",
+        aliases: &["term"],
+        doc: "",
+        fun: terminal,
+        completer: SHELL_COMPLETER,
+        signature: SHELL_SIGNATURE,
     },
 ];
 

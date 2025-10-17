@@ -1408,39 +1408,43 @@ impl Component for EditorView {
                         Mode::Insert => {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
-                            if let Some(completion) = &mut self.completion {
-                                let res = {
-                                    // use a fake context here
-                                    let mut cx = Context {
-                                        editor: cx.editor,
-                                        jobs: cx.jobs,
-                                        scroll: None,
+                            let (_, doc) = current_ref!(cx.editor);
+
+                            if !cx.editor.has_process(doc.id()) {
+                                if let Some(completion) = &mut self.completion {
+                                    let res = {
+                                        // use a fake context here
+                                        let mut cx = Context {
+                                            editor: cx.editor,
+                                            jobs: cx.jobs,
+                                            scroll: None,
+                                        };
+
+                                        if let EventResult::Consumed(callback) =
+                                            completion.handle_event(event, &mut cx)
+                                        {
+                                            consumed = true;
+                                            Some(callback)
+                                        } else if let EventResult::Consumed(callback) = completion
+                                            .handle_event(&Event::Key(key!(Enter)), &mut cx)
+                                        {
+                                            Some(callback)
+                                        } else {
+                                            None
+                                        }
                                     };
 
-                                    if let EventResult::Consumed(callback) =
-                                        completion.handle_event(event, &mut cx)
-                                    {
-                                        consumed = true;
-                                        Some(callback)
-                                    } else if let EventResult::Consumed(callback) =
-                                        completion.handle_event(&Event::Key(key!(Enter)), &mut cx)
-                                    {
-                                        Some(callback)
-                                    } else {
-                                        None
-                                    }
-                                };
-
-                                if let Some(callback) = res {
-                                    if callback.is_some() {
-                                        // assume close_fn
-                                        if let Some(cb) = self.clear_completion(cx.editor) {
-                                            if consumed {
-                                                cx.on_next_key_callback =
-                                                    Some((cb, OnKeyCallbackKind::Fallback))
-                                            } else {
-                                                self.on_next_key =
-                                                    Some((cb, OnKeyCallbackKind::Fallback));
+                                    if let Some(callback) = res {
+                                        if callback.is_some() {
+                                            // assume close_fn
+                                            if let Some(cb) = self.clear_completion(cx.editor) {
+                                                if consumed {
+                                                    cx.on_next_key_callback =
+                                                        Some((cb, OnKeyCallbackKind::Fallback))
+                                                } else {
+                                                    self.on_next_key =
+                                                        Some((cb, OnKeyCallbackKind::Fallback));
+                                                }
                                             }
                                         }
                                     }
