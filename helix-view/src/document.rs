@@ -203,6 +203,7 @@ pub struct Document {
     pub focused_at: std::time::Instant,
 
     pub readonly: bool,
+    pub is_term: bool,
 
     pub previous_diagnostic_id: Option<String>,
 
@@ -727,6 +728,7 @@ impl Document {
             version_control_head: None,
             focused_at: std::time::Instant::now(),
             readonly: false,
+            is_term: false,
             jump_labels: HashMap::new(),
             color_swatches: None,
             color_swatch_controller: TaskController::new(),
@@ -1212,6 +1214,11 @@ impl Document {
             None => false,
             Some(p) => readonly(p),
         };
+    }
+
+    pub fn make_be_term(mut self) -> Self {
+        self.is_term = true;
+        self
     }
 
     /// Reload the document from its path.
