@@ -203,7 +203,6 @@ pub struct Document {
     pub focused_at: std::time::Instant,
 
     pub readonly: bool,
-    pub is_term: bool,
 
     pub previous_diagnostic_id: Option<String>,
 
@@ -218,6 +217,8 @@ pub struct Document {
     // of storing a copy on every doc. Then we can remove the surrounding `Arc` and use the
     // `ArcSwap` directly.
     syn_loader: Arc<ArcSwap<syntax::Loader>>,
+
+    pub is_terminal: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -728,13 +729,13 @@ impl Document {
             version_control_head: None,
             focused_at: std::time::Instant::now(),
             readonly: false,
-            is_term: false,
             jump_labels: HashMap::new(),
             color_swatches: None,
             color_swatch_controller: TaskController::new(),
             syn_loader,
             previous_diagnostic_id: None,
             pull_diagnostic_controller: TaskController::new(),
+            is_terminal: false,
         }
     }
 
@@ -1214,11 +1215,6 @@ impl Document {
             None => false,
             Some(p) => readonly(p),
         };
-    }
-
-    pub fn make_be_term(mut self) -> Self {
-        self.is_term = true;
-        self
     }
 
     /// Reload the document from its path.

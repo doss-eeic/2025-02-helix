@@ -2683,10 +2683,9 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
         return Ok(());
     }
 
-    let doc_id = cx.editor.new_file_from_document(
-        Action::Replace,
-        Document::default(cx.editor.config.clone(), cx.editor.syn_loader.clone()).make_be_term(),
-    );
+    let mut doc = Document::default(cx.editor.config.clone(), cx.editor.syn_loader.clone());
+    doc.is_terminal = true;
+    let doc_id = cx.editor.new_file_from_document(Action::Replace, doc);
 
     if let Err(error) = cx.editor.attach_process(doc_id, args) {
         match error {
