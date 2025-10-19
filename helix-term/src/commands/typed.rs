@@ -2683,14 +2683,15 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
         return Ok(());
     }
 
-    let mut doc = Document::default(cx.editor.config.clone(), cx.editor.syn_loader.clone());
-    doc.is_terminal = true;
-    let doc_id = cx.editor.new_file_from_document(Action::Replace, doc);
+    let doc_id = cx.editor.new_file(Action::Replace);
 
-    if let Err(error) = cx.editor.attach_process(doc_id, args) {
+    if let Err(error) = cx
+        .editor
+        .attach_process(doc_id, args.into_iter().map(Cow::into_owned))
+    {
         match error {
             AttachProcessError::AlreadyAttached => bail!("error process already attached"),
-            AttachProcessError::ProgramNotSpecified => bail!("specify a program"),
+            AttachProcessError::InvalidArgs => bail!("specify a program"),
             AttachProcessError::CannotSpawn(error) => bail!("error: {error:?}"),
         }
     }
