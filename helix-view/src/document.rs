@@ -18,6 +18,8 @@ use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
 use once_cell::sync::OnceCell;
 use thiserror;
+use tokio::process::Child;
+use tokio::sync::mpsc::UnboundedSender;
 
 use ::parking_lot::Mutex;
 use serde::de::{self, Deserialize, Deserializer};
@@ -218,7 +220,7 @@ pub struct Document {
     // `ArcSwap` directly.
     syn_loader: Arc<ArcSwap<syntax::Loader>>,
 
-    pub is_terminal: bool,
+    pub process: Option<(Child, UnboundedSender<char>)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -735,7 +737,7 @@ impl Document {
             syn_loader,
             previous_diagnostic_id: None,
             pull_diagnostic_controller: TaskController::new(),
-            is_terminal: false,
+            process: Option::None,
         }
     }
 
