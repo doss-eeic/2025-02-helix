@@ -36,8 +36,8 @@ use std::{
 };
 
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    io::{AsyncBufReadExt as _, AsyncRead, AsyncWriteExt as _, BufReader},
+    process::Command,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::{sleep, Duration, Instant, Sleep},
 };
@@ -1158,10 +1158,6 @@ pub struct Editor {
     pub next_document_id: DocumentId,
     pub documents: BTreeMap<DocumentId, Document>,
 
-    pub processes: BTreeMap<DocumentId, (Child, UnboundedSender<String>)>,
-    pub stdout_sender: UnboundedSender<(DocumentId, String)>,
-    pub stdout_receiver: UnboundedReceiver<(DocumentId, String)>,
-
     // We Flatten<> to resolve the inner DocumentSavedEventFuture. For that we need a stream of streams, hence the Once<>.
     // https://stackoverflow.com/a/66875668
     pub saves: HashMap<DocumentId, UnboundedSender<Once<DocumentSavedEventFuture>>>,
@@ -1226,6 +1222,8 @@ pub struct Editor {
 
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
+
+    pub process_queue: SelectAll<UnboundedReceiverStream<(DocumentId, char)>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1238,6 +1236,7 @@ pub enum EditorEvent {
     DebuggerEvent((DebugAdapterId, dap::Payload)),
     IdleTimer,
     Redraw,
+    ReceiveStdout,
 }
 
 #[derive(Debug, Clone)]
@@ -1281,16 +1280,6 @@ impl Action {
     }
 }
 
-pub enum AttachProcessError {
-    AlreadyAttached,
-    ProgramNotSpecified,
-    CannotSpawn(io::Error),
-}
-
-pub enum DetachProcessError {
-    NotAttached,
-}
-
 /// Error thrown on failed document closed
 pub enum CloseError {
     /// Document doesn't exist
@@ -1299,7 +1288,12 @@ pub enum CloseError {
     BufferModified(String),
     /// Document failed to save
     SaveError(anyhow::Error),
-    DetachProcessError(DetachProcessError),
+}
+
+pub enum AttachProcessError {
+    AlreadyAttached,
+    InvalidArgs,
+    CannotSpawn(io::Error),
 }
 
 impl Editor {
@@ -1310,7 +1304,6 @@ impl Editor {
         config: Arc<dyn DynAccess<Config>>,
         handlers: Handlers,
     ) -> Self {
-        let (stdout_sender, stdout_receiver) = unbounded_channel();
         let language_servers = helix_lsp::Registry::new(syn_loader.clone());
         let conf = config.load();
         let auto_pairs = (&conf.auto_pairs).into();
@@ -1323,9 +1316,6 @@ impl Editor {
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),
             documents: BTreeMap::new(),
-            processes: BTreeMap::new(),
-            stdout_sender,
-            stdout_receiver,
             saves: HashMap::new(),
             save_queue: SelectAll::new(),
             write_count: 0,
@@ -1362,6 +1352,7 @@ impl Editor {
             handlers,
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
+            process_queue: SelectAll::new(),
         }
     }
 
@@ -1757,7 +1748,7 @@ impl Editor {
                         .tree
                         .traverse()
                         .any(|(_, v)| v.doc == doc.id && v.id != view.id)
-                    && !doc.is_terminal;
+                    && doc.process.is_none();
 
                 let (view, doc) = current!(self);
                 let view_id = view.id;
@@ -1857,7 +1848,7 @@ impl Editor {
         id
     }
 
-    pub fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
+    fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
         let id = self.new_document(doc);
         self.switch(id, action);
         id
@@ -1992,11 +1983,6 @@ impl Editor {
             }
         }
 
-        if self.has_process(doc_id) {
-            self.detach_process(doc_id)
-                .map_err(CloseError::DetachProcessError)?;
-        }
-
         let doc = self.documents.remove(&doc_id).unwrap();
 
         // If the document we removed was visible in all views, we will have no more views. We don't
@@ -2028,29 +2014,25 @@ impl Editor {
         Ok(())
     }
 
-    pub fn has_process(&self, doc_id: DocumentId) -> bool {
-        self.processes.contains_key(&doc_id)
-    }
-
     pub fn attach_process(
         &mut self,
         doc_id: DocumentId,
-        args: helix_core::command_line::Args,
+        mut args: impl Iterator<Item = String>,
     ) -> Result<(), AttachProcessError> {
-        if self.has_process(doc_id) {
+        let doc = &mut self.documents.get_mut(&doc_id).unwrap();
+
+        if doc.process.is_some() {
             return Err(AttachProcessError::AlreadyAttached);
         }
 
-        let mut args = args.into_iter();
-
         let Some(program) = args.next() else {
-            return Err(AttachProcessError::ProgramNotSpecified);
+            return Err(AttachProcessError::InvalidArgs);
         };
 
-        let mut command = Command::new(&*program);
+        let mut command = Command::new(program);
 
         for arg in args {
-            command.arg(&*arg);
+            command.arg(arg);
         }
 
         let mut child = command
@@ -2061,61 +2043,54 @@ impl Editor {
             .spawn()
             .map_err(AttachProcessError::CannotSpawn)?;
 
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let stderr = BufReader::new(child.stderr.take().unwrap());
-        let (stdin_sender, stdin_receiver) = unbounded_channel();
-        self.processes.insert(doc_id, (child, stdin_sender));
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (stdin_sender, mut stdin_receiver) = unbounded_channel();
+        let (stdout_sender, stdout_receiver) = unbounded_channel();
+        doc.process = Option::Some((child, stdin_sender));
 
-        fn spawn_stdin_task<W: AsyncWrite + Send + Unpin + 'static>(
-            mut writer: W,
-            mut receiver: UnboundedReceiver<String>,
-        ) {
-            tokio::spawn(async move {
-                while let Some(s) = receiver.recv().await {
-                    if writer.write_all(s.as_bytes()).await.is_err() {
-                        break;
-                    }
+        self.process_queue
+            .push(UnboundedReceiverStream::new(stdout_receiver));
+
+        tokio::spawn(async move {
+            while let Some(c) = stdin_receiver.recv().await {
+                let mut b = [0; 4];
+                let s = c.encode_utf8(&mut b);
+
+                if stdin.write_all(s.as_bytes()).await.is_err() {
+                    break;
                 }
-            });
-        }
+            }
+        });
 
-        spawn_stdin_task(stdin, stdin_receiver);
-
-        fn spawn_stdout_task<R: AsyncBufRead + Send + Unpin + 'static>(
-            mut reader: R,
+        fn spawn_stdout_task<R: AsyncRead + Send + Unpin + 'static>(
+            reader: R,
             doc_id: DocumentId,
-            sender: UnboundedSender<(DocumentId, String)>,
+            sender: UnboundedSender<(DocumentId, char)>,
         ) {
             tokio::spawn(async move {
-                loop {
-                    let mut s = String::new();
+                let mut reader = BufReader::new(reader);
+                let mut s = String::new();
 
+                loop {
                     if reader.read_line(&mut s).await.is_err() {
                         break;
                     }
 
-                    if sender.send((doc_id, s)).is_err() {
-                        break;
+                    for c in s.chars() {
+                        if sender.send((doc_id, c)).is_err() {
+                            break;
+                        }
                     }
+
+                    s.clear();
                 }
             });
         }
 
-        spawn_stdout_task(stdout, doc_id, self.stdout_sender.clone());
-        spawn_stdout_task(stderr, doc_id, self.stdout_sender.clone());
-        Result::Ok(())
-    }
-
-    pub fn detach_process(&mut self, doc_id: DocumentId) -> Result<(), DetachProcessError> {
-        let Some((mut process, _)) = self.processes.remove(&doc_id) else {
-            return Err(DetachProcessError::NotAttached);
-        };
-
-        tokio::spawn(async move {
-            _ = process.kill().await;
-        });
-
+        spawn_stdout_task(stdout, doc_id, stdout_sender.clone());
+        spawn_stdout_task(stderr, doc_id, stdout_sender);
         Result::Ok(())
     }
 
@@ -2354,15 +2329,6 @@ impl Editor {
             tokio::select! {
                 biased;
 
-                Some((doc_id, s)) = self.stdout_receiver.recv() => {
-                    if let Some(doc) = self.documents.get_mut(&doc_id) {
-                        if let Some(view_id) = doc.selections().keys().nth(0) {
-                            let text = doc.text();
-                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), s.into());
-                            doc.apply(&transaction, *view_id);
-                        }
-                    }
-                }
                 Some(event) = self.save_queue.next() => {
                     self.write_count -= 1;
                     return EditorEvent::DocumentSaved(event)
@@ -2393,6 +2359,18 @@ impl Editor {
                 }
                 _ = &mut self.idle_timer  => {
                     return EditorEvent::IdleTimer
+                }
+
+                Some((doc_id, c)) = self.process_queue.next() => {
+                    if let Some(doc) = self.documents.get_mut(&doc_id) {
+                        if let Some(view_id) = doc.selections().keys().nth(0) {
+                            let text = doc.text();
+                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
+                            doc.apply(&transaction, *view_id);
+                        }
+                    }
+
+                    return EditorEvent::ReceiveStdout;
                 }
             }
         }
