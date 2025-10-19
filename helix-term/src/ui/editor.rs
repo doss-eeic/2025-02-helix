@@ -1409,8 +1409,9 @@ impl Component for EditorView {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
                             let (_, doc) = current_ref!(cx.editor);
+                            let doc_id = doc.id();
 
-                            if !cx.editor.has_process(doc.id()) {
+                            if !doc.is_terminal {
                                 if let Some(completion) = &mut self.completion {
                                     let res = {
                                         // use a fake context here
@@ -1457,6 +1458,12 @@ impl Component for EditorView {
 
                                 // record last_insert key
                                 self.last_insert.1.push(InsertEvent::Key(key));
+
+                                if let Some((_, stdin)) = cx.editor.processes.get(&doc_id) {
+                                    if let Some(c) = key.inputed_char() {
+                                        _ = stdin.send(format!("{c}"));
+                                    }
+                                }
                             }
                         }
                         mode => self.command_mode(mode, &mut cx, key),

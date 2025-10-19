@@ -101,6 +101,19 @@ impl KeyEvent {
             s
         }
     }
+
+    pub fn inputed_char(&self) -> Option<char> {
+        match (self.code, self.modifiers.contains(KeyModifiers::SHIFT)) {
+            (KeyCode::Enter, _) => Option::Some('\n'),
+            (KeyCode::Tab, _) => Option::Some('\t'),
+            (KeyCode::Char(c), u) => Option::Some(match u {
+                true => c.to_ascii_uppercase(),
+                false => c.to_ascii_lowercase(),
+            }),
+            (KeyCode::Null, _) => Option::Some('\0'),
+            _ => Option::None,
+        }
+    }
 }
 
 pub(crate) mod keys {
