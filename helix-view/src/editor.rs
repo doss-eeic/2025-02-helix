@@ -1757,7 +1757,7 @@ impl Editor {
                         .tree
                         .traverse()
                         .any(|(_, v)| v.doc == doc.id && v.id != view.id)
-                    && !doc.is_term;
+                    && !doc.is_terminal;
 
                 let (view, doc) = current!(self);
                 let view_id = view.id;
