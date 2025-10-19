@@ -27,6 +27,7 @@ helix-vcs = { path = "../helix-vcs" }
 bitflags.workspace = true
 anyhow = "1"
 termina = { workspace = true, optional = true }
+vte = "0.15.0"
 
 tempfile.workspace = true
 
