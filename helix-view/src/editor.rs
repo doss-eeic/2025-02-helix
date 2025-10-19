@@ -36,7 +36,7 @@ use std::{
 };
 
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncRead, AsyncWriteExt as _, BufReader},
+    io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _},
     process::Command,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::{sleep, Duration, Instant, Sleep},
@@ -64,6 +64,8 @@ use arc_swap::{
     access::{DynAccess, DynGuard},
     ArcSwap,
 };
+
+use vte::{Parser, Perform};
 
 pub const DEFAULT_AUTO_SAVE_DELAY: u64 = 3000;
 
@@ -1223,7 +1225,7 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
 
-    pub process_queue: SelectAll<UnboundedReceiverStream<(DocumentId, char)>>,
+    pub command_queue: SelectAll<UnboundedReceiverStream<(DocumentId, EscapeCommand)>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1263,6 +1265,11 @@ pub enum CompleteAction {
         changes: Vec<Change>,
         placeholder: bool,
     },
+}
+
+pub enum EscapeCommand {
+    Print(char),
+    Execute(u8),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1352,7 +1359,7 @@ impl Editor {
             handlers,
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
-            process_queue: SelectAll::new(),
+            command_queue: SelectAll::new(),
         }
     }
 
@@ -2046,15 +2053,15 @@ impl Editor {
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        let (stdin_sender, mut stdin_receiver) = unbounded_channel();
-        let (stdout_sender, stdout_receiver) = unbounded_channel();
-        doc.process = Option::Some((child, stdin_sender));
+        let (input_sender, mut input_receiver) = unbounded_channel();
+        let (command_sender, command_receiver) = unbounded_channel();
+        doc.process = Option::Some((child, input_sender));
 
-        self.process_queue
-            .push(UnboundedReceiverStream::new(stdout_receiver));
+        self.command_queue
+            .push(UnboundedReceiverStream::new(command_receiver));
 
         tokio::spawn(async move {
-            while let Some(c) = stdin_receiver.recv().await {
+            while let Some(c) = input_receiver.recv().await {
                 let mut b = [0; 4];
                 let s = c.encode_utf8(&mut b);
 
@@ -2064,33 +2071,46 @@ impl Editor {
             }
         });
 
-        fn spawn_stdout_task<R: AsyncRead + Send + Unpin + 'static>(
-            reader: R,
+        fn spawn_performer<R: AsyncRead + Send + Unpin + 'static>(
+            mut reader: R,
             doc_id: DocumentId,
-            sender: UnboundedSender<(DocumentId, char)>,
+            sender: UnboundedSender<(DocumentId, EscapeCommand)>,
         ) {
             tokio::spawn(async move {
-                let mut reader = BufReader::new(reader);
-                let mut s = String::new();
+                struct SendingPerformer {
+                    doc_id: DocumentId,
+                    sender: UnboundedSender<(DocumentId, EscapeCommand)>,
+                }
+
+                impl Perform for SendingPerformer {
+                    fn print(&mut self, c: char) {
+                        let _ = self.sender.send((self.doc_id, EscapeCommand::Print(c)));
+                    }
+
+                    fn execute(&mut self, byte: u8) {
+                        let _ = self
+                            .sender
+                            .send((self.doc_id, EscapeCommand::Execute(byte)));
+                    }
+                }
+
+                let mut input = Vec::new();
+                let mut parser = Parser::new();
+                let mut performer = SendingPerformer { doc_id, sender };
 
                 loop {
-                    if reader.read_line(&mut s).await.is_err() {
+                    if reader.read_buf(&mut input).await.is_err() {
                         break;
                     }
 
-                    for c in s.chars() {
-                        if sender.send((doc_id, c)).is_err() {
-                            break;
-                        }
-                    }
-
-                    s.clear();
+                    parser.advance(&mut performer, &input);
+                    input.clear();
                 }
             });
         }
 
-        spawn_stdout_task(stdout, doc_id, stdout_sender.clone());
-        spawn_stdout_task(stderr, doc_id, stdout_sender);
+        spawn_performer(stdout, doc_id, command_sender.clone());
+        spawn_performer(stderr, doc_id, command_sender);
         Result::Ok(())
     }
 
@@ -2361,14 +2381,34 @@ impl Editor {
                     return EditorEvent::IdleTimer
                 }
 
-                Some((doc_id, c)) = self.process_queue.next() => {
+                Some((doc_id, command)) = self.command_queue.next() => {
                     if let Some(doc) = self.documents.get_mut(&doc_id) {
                         if let Some(view_id) = doc.selections().keys().nth(0) {
-                            let text = doc.text();
-                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
-                            doc.apply(&transaction, *view_id);
+                            match command {
+                                EscapeCommand::Print(c) => {
+                                    let text = doc.text();
+                                    let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
+                                    doc.apply(&transaction, *view_id);
+                                }
+                                EscapeCommand::Execute(b) => {
+                                    match b {
+                                        0x07 => {
+                                            let text = doc.text();
+                                            let transaction = Transaction::delete(text, [(text.len_chars() - 1, text.len_chars())].into_iter());
+                                            doc.apply(&transaction, *view_id);
+                                        }
+                                        0x0A | 0x0D => {
+                                            let text = doc.text();
+                                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), "\n".into());
+                                            doc.apply(&transaction, *view_id);
+                                        },
+                                        _ => {},
+                                    }
+                                }
+                            }
                         }
                     }
+
 
                     return EditorEvent::ReceiveStdout;
                 }
