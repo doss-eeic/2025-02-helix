@@ -8,6 +8,7 @@ use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
+use helix_core::editor_config;
 use helix_core::encoding::Encoding;
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
@@ -33,6 +34,13 @@ use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
+use crate::{
+    editor::Config,
+    events::{DocumentDidChange, SelectionDidChange},
+    expansion,
+    view::ViewPosition,
+    DocumentId, Editor, Theme, View, ViewId,
+};
 use helix_core::{
     editor_config::EditorConfig,
     encoding,
@@ -41,14 +49,6 @@ use helix_core::{
     line_ending::auto_detect_line_ending,
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
-};
-
-use crate::{
-    editor::Config,
-    events::{DocumentDidChange, SelectionDidChange},
-    expansion,
-    view::ViewPosition,
-    DocumentId, Editor, Theme, View, ViewId,
 };
 
 /// 8kB of buffer space for encoding and decoding `Rope`s.
@@ -683,7 +683,12 @@ use helix_lsp::{lsp, Client, LanguageServerId, LanguageServerName};
 use url::Url;
 
 //spellchecker
+use helix_core::diagnostic::DiagnosticTag;
+use helix_core::diagnostic::Range as DiagRange;
+use helix_core::diagnostic::Severity;
 use helix_core::spellchecker::SpellEngine;
+use helix_core::tree_sitter;
+use serde_json::json;
 
 impl Document {
     pub fn from(
@@ -2298,38 +2303,82 @@ impl Document {
     }
 
     //spellchecker
-    pub fn run_spellcheck(&self) {
+
+    pub fn run_spellcheck(&mut self) {
         let Some(syntax) = &self.syntax else {
             return;
         };
         let tree = syntax.tree();
         let root = tree.root_node();
 
-        let aff = std::fs::read_to_string("./vendor/en_US/en_US.aff").unwrap();
-        let dic = std::fs::read_to_string("./vendor/en_US/en_US.dic").unwrap();
+        let mut keep: Vec<Diagnostic> = self
+            .diagnostics()
+            .iter()
+            .cloned()
+            .filter(|d| d.source.as_deref() != Some("spellcheck"))
+            .collect();
+
+        let aff = std::fs::read_to_string("./dict/en/index.aff").unwrap();
+        let dic = std::fs::read_to_string("./dict/en/index.dic").unwrap();
         let spell = helix_core::spellchecker::SpellEngine::new(&aff, &dic)
             .expect("failed to parse dictionary");
 
-        for node in root.children() {
-            let kind = node.kind();
-            if kind == "comment" || kind == "string_literal" {
-                let byte_range = node.byte_range();
-                let slice = self
-                    .text
-                    .slice(byte_range.start as usize..byte_range.end as usize)
-                    .to_string();
+        let mut spell_diags = Vec::new();
 
-                let results = spell.check_text(&slice);
-                for (start, end, sug) in results {
-                    println!(
-                        "Misspelled: {:?} → {:?} ({:?})",
-                        &slice[start..end],
-                        sug,
-                        kind
-                    );
-                }
+        fn walk_tree<F>(node: &tree_sitter::Node, f: &mut F)
+        where
+            F: FnMut(tree_sitter::Node),
+        {
+            f(node.clone());
+            for child in node.children() {
+                walk_tree(&child, f);
             }
         }
+
+        walk_tree(&root, &mut |node| {
+            let kind = node.kind();
+
+            if true {
+                let br = node.byte_range();
+                let slice = self
+                    .text
+                    .slice(br.start as usize..br.end as usize)
+                    .to_string();
+
+                for (start, end, sug) in spell.check_text(&slice) {
+                    let abs_start = br.start as usize + start;
+                    let abs_end = br.start as usize + end;
+
+                    // 行番号の算出（0-based）
+                    let start_char = self.text.byte_to_char(abs_start);
+                    let line = self.text.char_to_line(start_char);
+
+                    spell_diags.push(Diagnostic {
+                        range: DiagRange {
+                            start: abs_start,
+                            end: abs_end,
+                        },
+                        line,
+                        message: format!("Possibly misspelled word. Suggestion: {}", sug),
+                        severity: Some(Severity::Error),
+                        code: None,
+                        tags: vec![DiagnosticTag::Deprecated],
+                        source: Some("spellcheck".to_string()),
+                        data: Some(json!({
+                            "suggestions": [sug],
+                            "lang": "en-US"
+                        })),
+                        provider: DiagnosticProvider::SpellCheck,
+                        ends_at_word: true,
+                        starts_at_word: true,
+                        zero_width: false,
+                    });
+                }
+            }
+        });
+
+        keep.extend(spell_diags);
+        self.replace_diagnostics(keep, &[], None);
     }
 }
 

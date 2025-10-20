@@ -233,6 +233,8 @@ fn request_document_diagnostics_for_language_severs(
                         retry_language_servers.insert(server_id);
                     }
                 }
+                Some(Some((Ok(_), DiagnosticProvider::SpellCheck, _))) => {}
+                Some(Some((Err(_), DiagnosticProvider::SpellCheck, _))) => {}
                 Some(None) => break,
                 // The request was cancelled.
                 None => return,

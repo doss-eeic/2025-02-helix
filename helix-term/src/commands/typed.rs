@@ -2693,6 +2693,7 @@ pub fn command_spellcheck(
 ) -> Result<()> {
     let (view, doc) = current!(cx.editor);
     doc.run_spellcheck();
+    cx.editor.set_status("Running spellcheck...");
     Ok(())
 }
 
