@@ -2308,6 +2308,7 @@ impl Document {
         let Some(syntax) = &self.syntax else {
             return;
         };
+
         let tree = syntax.tree();
         let root = tree.root_node();
 
@@ -2318,11 +2319,10 @@ impl Document {
             .filter(|d| d.source.as_deref() != Some("spellcheck"))
             .collect();
 
-        let aff = std::fs::read_to_string("./dict/en/index.aff").unwrap();
-        let dic = std::fs::read_to_string("./dict/en/index.dic").unwrap();
+        let aff = std::fs::read_to_string("./runtime/dicts/en/index.aff").unwrap();
+        let dic = std::fs::read_to_string("./runtime/dicts/en/index.dic").unwrap();
         let spell = helix_core::spellchecker::SpellEngine::new(&aff, &dic)
             .expect("failed to parse dictionary");
-
         let mut spell_diags = Vec::new();
 
         fn walk_tree<F>(node: &tree_sitter::Node, f: &mut F)
@@ -2337,13 +2337,16 @@ impl Document {
 
         walk_tree(&root, &mut |node| {
             let kind = node.kind();
+            log::warn!("{kind}");
 
-            if true {
+            if kind == "identifier" {
                 let br = node.byte_range();
                 let slice = self
                     .text
                     .slice(br.start as usize..br.end as usize)
                     .to_string();
+
+                //log::warn!("{slice}");
 
                 for (start, end, sug) in spell.check_text(&slice) {
                     let abs_start = br.start as usize + start;

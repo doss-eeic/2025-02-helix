@@ -26,7 +26,7 @@ impl SpellEngine {
         out
     }
 }
-//i am poppor
+
 fn byte_word_ranges(s: &str) -> Vec<(usize, usize)> {
     let mut res = Vec::new();
     let mut in_word = false;
