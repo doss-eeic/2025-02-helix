@@ -1561,7 +1561,7 @@ impl Document {
     ) -> bool {
         // store the state just before any changes are made. This allows us to undo to the
         // state just before a transaction was applied.
-        if self.changes.is_empty() && !transaction.changes().is_empty() {
+        if self.changes.is_empty() && !transaction.changes().is_empty() && self.process.is_none() {
             self.old_state = Some(State {
                 doc: self.text.clone(),
                 selection: self.selection(view_id).clone(),
@@ -1570,7 +1570,7 @@ impl Document {
 
         let success = self.apply_impl(transaction, view_id, emit_lsp_notification);
 
-        if !transaction.changes().is_empty() {
+        if !transaction.changes().is_empty() && self.process.is_none() {
             // Compose this transaction with the previous one
             take_with(&mut self.changes, |changes| {
                 changes.compose(transaction.changes().clone())
@@ -1591,6 +1591,10 @@ impl Document {
     }
 
     fn undo_redo_impl(&mut self, view: &mut View, undo: bool) -> bool {
+        if self.process.is_some() {
+            return false;
+        }
+
         if undo {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -1676,6 +1680,10 @@ impl Document {
     }
 
     fn earlier_later_impl(&mut self, view: &mut View, uk: UndoKind, earlier: bool) -> bool {
+        if self.process.is_some() {
+            return false;
+        }
+
         if earlier {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -1713,7 +1721,7 @@ impl Document {
 
     /// Commit pending changes to history
     pub fn append_changes_to_history(&mut self, view: &mut View) {
-        if self.changes.is_empty() {
+        if self.changes.is_empty() || self.process.is_some() {
             return;
         }
 

@@ -2684,6 +2684,9 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
     }
 
     let doc_id = cx.editor.new_file(Action::Replace);
+    let (view, doc) = current!(cx.editor);
+    let transaction = Transaction::delete(doc.text(), [(0, doc.text().len_chars())].into_iter());
+    doc.apply(&transaction, view.id);
 
     if let Err(error) = cx
         .editor
@@ -3755,7 +3758,10 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         doc: "",
         fun: terminal,
         completer: SHELL_COMPLETER,
-        signature: SHELL_SIGNATURE,
+        signature: Signature {
+            positionals: (0, None),
+            ..SHELL_SIGNATURE
+        },
     },
 ];
 
