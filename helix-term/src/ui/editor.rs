@@ -24,7 +24,7 @@ use helix_core::{
 };
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
-    document::{Mode, SCRATCH_BUFFER_NAME},
+    document::{ApplySource, Mode, SCRATCH_BUFFER_NAME},
     editor::{CompleteAction, CursorShapeConfig},
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
@@ -992,7 +992,7 @@ impl EditorView {
                                         (shift_position(start), shift_position(end), t)
                                     }),
                                 );
-                                doc.apply(&tx, view.id);
+                                doc.apply(&tx, ApplySource::View(view.id));
                             }
                             InsertEvent::TriggerCompletion => {
                                 last_savepoint = take(&mut last_request_savepoint);
@@ -1074,7 +1074,10 @@ impl EditorView {
                         if let Some(c) = key.char() {
                             let (view, doc) = current!(cx.editor);
                             if let Some(snippet) = &doc.active_snippet {
-                                doc.apply(&snippet.delete_placeholder(doc.text()), view.id);
+                                doc.apply(
+                                    &snippet.delete_placeholder(doc.text()),
+                                    ApplySource::View(view.id),
+                                );
                             }
                             commands::insert::insert_char(cx, c);
                         }
@@ -1408,39 +1411,43 @@ impl Component for EditorView {
                         Mode::Insert => {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
-                            if let Some(completion) = &mut self.completion {
-                                let res = {
-                                    // use a fake context here
-                                    let mut cx = Context {
-                                        editor: cx.editor,
-                                        jobs: cx.jobs,
-                                        scroll: None,
+                            let (_, doc) = current_ref!(cx.editor);
+
+                            if doc.process.is_none() {
+                                if let Some(completion) = &mut self.completion {
+                                    let res = {
+                                        // use a fake context here
+                                        let mut cx = Context {
+                                            editor: cx.editor,
+                                            jobs: cx.jobs,
+                                            scroll: None,
+                                        };
+
+                                        if let EventResult::Consumed(callback) =
+                                            completion.handle_event(event, &mut cx)
+                                        {
+                                            consumed = true;
+                                            Some(callback)
+                                        } else if let EventResult::Consumed(callback) = completion
+                                            .handle_event(&Event::Key(key!(Enter)), &mut cx)
+                                        {
+                                            Some(callback)
+                                        } else {
+                                            None
+                                        }
                                     };
 
-                                    if let EventResult::Consumed(callback) =
-                                        completion.handle_event(event, &mut cx)
-                                    {
-                                        consumed = true;
-                                        Some(callback)
-                                    } else if let EventResult::Consumed(callback) =
-                                        completion.handle_event(&Event::Key(key!(Enter)), &mut cx)
-                                    {
-                                        Some(callback)
-                                    } else {
-                                        None
-                                    }
-                                };
-
-                                if let Some(callback) = res {
-                                    if callback.is_some() {
-                                        // assume close_fn
-                                        if let Some(cb) = self.clear_completion(cx.editor) {
-                                            if consumed {
-                                                cx.on_next_key_callback =
-                                                    Some((cb, OnKeyCallbackKind::Fallback))
-                                            } else {
-                                                self.on_next_key =
-                                                    Some((cb, OnKeyCallbackKind::Fallback));
+                                    if let Some(callback) = res {
+                                        if callback.is_some() {
+                                            // assume close_fn
+                                            if let Some(cb) = self.clear_completion(cx.editor) {
+                                                if consumed {
+                                                    cx.on_next_key_callback =
+                                                        Some((cb, OnKeyCallbackKind::Fallback))
+                                                } else {
+                                                    self.on_next_key =
+                                                        Some((cb, OnKeyCallbackKind::Fallback));
+                                                }
                                             }
                                         }
                                     }
@@ -1453,6 +1460,14 @@ impl Component for EditorView {
 
                                 // record last_insert key
                                 self.last_insert.1.push(InsertEvent::Key(key));
+
+                                let (_, doc) = current_ref!(cx.editor);
+
+                                if let Some((_, stdin)) = &doc.process {
+                                    if let Some(c) = key.inputed_char() {
+                                        _ = stdin.send(c);
+                                    }
+                                }
                             }
                         }
                         mode => self.command_mode(mode, &mut cx, key),

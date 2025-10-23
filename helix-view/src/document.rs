@@ -18,6 +18,8 @@ use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
 use once_cell::sync::OnceCell;
 use thiserror;
+use tokio::process::Child;
+use tokio::sync::mpsc::UnboundedSender;
 
 use ::parking_lot::Mutex;
 use serde::de::{self, Deserialize, Deserializer};
@@ -217,6 +219,8 @@ pub struct Document {
     // of storing a copy on every doc. Then we can remove the surrounding `Arc` and use the
     // `ArcSwap` directly.
     syn_loader: Arc<ArcSwap<syntax::Loader>>,
+
+    pub process: Option<(Child, UnboundedSender<char>)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -733,6 +737,7 @@ impl Document {
             syn_loader,
             previous_diagnostic_id: None,
             pull_diagnostic_controller: TaskController::new(),
+            process: Option::None,
         }
     }
 
@@ -1239,7 +1244,7 @@ impl Document {
         // This is not considered a modification of the contents of the file regardless
         // of the encoding.
         let transaction = helix_core::diff::compare_ropes(self.text(), &rope);
-        self.apply(&transaction, view.id);
+        self.apply(&transaction, ApplySource::View(view.id));
         self.append_changes_to_history(view);
         self.reset_modified();
         self.pickup_last_saved_time();
@@ -1380,7 +1385,7 @@ impl Document {
     fn apply_impl(
         &mut self,
         transaction: &Transaction,
-        view_id: ViewId,
+        source: ApplySource,
         emit_lsp_notification: bool,
     ) -> bool {
         use helix_core::Assoc;
@@ -1393,14 +1398,21 @@ impl Document {
 
         if changes.is_empty() {
             if let Some(selection) = transaction.selection() {
-                self.selections.insert(
-                    view_id,
-                    selection.clone().ensure_invariants(self.text.slice(..)),
-                );
-                helix_event::dispatch(SelectionDidChange {
-                    doc: self,
-                    view: view_id,
-                });
+                let view_ids = match source {
+                    ApplySource::View(view_id) => [view_id].to_vec(),
+                    ApplySource::Process => self.selections.keys().copied().collect(),
+                };
+
+                for view_id in view_ids {
+                    self.selections.insert(
+                        view_id,
+                        selection.clone().ensure_invariants(self.text.slice(..)),
+                    );
+                    helix_event::dispatch(SelectionDidChange {
+                        doc: self,
+                        view: view_id,
+                    });
+                }
             }
             return true;
         }
@@ -1527,7 +1539,7 @@ impl Document {
 
         helix_event::dispatch(DocumentDidChange {
             doc: self,
-            view: view_id,
+            source,
             old_text: &old_doc,
             changes,
             ghost_transaction: !emit_lsp_notification,
@@ -1535,14 +1547,21 @@ impl Document {
 
         // if specified, the current selection should instead be replaced by transaction.selection
         if let Some(selection) = transaction.selection() {
-            self.selections.insert(
-                view_id,
-                selection.clone().ensure_invariants(self.text.slice(..)),
-            );
-            helix_event::dispatch(SelectionDidChange {
-                doc: self,
-                view: view_id,
-            });
+            let view_ids = match source {
+                ApplySource::View(view_id) => [view_id].to_vec(),
+                ApplySource::Process => self.selections.keys().copied().collect(),
+            };
+
+            for view_id in view_ids {
+                self.selections.insert(
+                    view_id,
+                    selection.clone().ensure_invariants(self.text.slice(..)),
+                );
+                helix_event::dispatch(SelectionDidChange {
+                    doc: self,
+                    view: view_id,
+                });
+            }
         }
 
         true
@@ -1551,21 +1570,23 @@ impl Document {
     fn apply_inner(
         &mut self,
         transaction: &Transaction,
-        view_id: ViewId,
+        source: ApplySource,
         emit_lsp_notification: bool,
     ) -> bool {
         // store the state just before any changes are made. This allows us to undo to the
         // state just before a transaction was applied.
-        if self.changes.is_empty() && !transaction.changes().is_empty() {
-            self.old_state = Some(State {
-                doc: self.text.clone(),
-                selection: self.selection(view_id).clone(),
-            });
+        if self.changes.is_empty() && !transaction.changes().is_empty() && self.process.is_none() {
+            if let ApplySource::View(view_id) = source {
+                self.old_state = Some(State {
+                    doc: self.text.clone(),
+                    selection: self.selection(view_id).clone(),
+                });
+            }
         }
 
-        let success = self.apply_impl(transaction, view_id, emit_lsp_notification);
+        let success = self.apply_impl(transaction, source, emit_lsp_notification);
 
-        if !transaction.changes().is_empty() {
+        if !transaction.changes().is_empty() && self.process.is_none() {
             // Compose this transaction with the previous one
             take_with(&mut self.changes, |changes| {
                 changes.compose(transaction.changes().clone())
@@ -1574,18 +1595,22 @@ impl Document {
         success
     }
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
-    pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
-        self.apply_inner(transaction, view_id, true)
+    pub fn apply(&mut self, transaction: &Transaction, source: ApplySource) -> bool {
+        self.apply_inner(transaction, source, true)
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text
     /// without notifying the language servers. This is useful for temporary transactions
     /// that must not influence the server.
-    pub fn apply_temporary(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
-        self.apply_inner(transaction, view_id, false)
+    pub fn apply_temporary(&mut self, transaction: &Transaction, source: ApplySource) -> bool {
+        self.apply_inner(transaction, source, false)
     }
 
     fn undo_redo_impl(&mut self, view: &mut View, undo: bool) -> bool {
+        if self.process.is_some() {
+            return false;
+        }
+
         if undo {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -1594,7 +1619,7 @@ impl Document {
         let mut history = self.history.take();
         let txn = if undo { history.undo() } else { history.redo() };
         let success = if let Some(txn) = txn {
-            self.apply_impl(txn, view.id, true)
+            self.apply_impl(txn, ApplySource::View(view.id), true)
         } else {
             false
         };
@@ -1665,12 +1690,16 @@ impl Document {
 
         let savepoint_ref = self.savepoints.remove(savepoint_idx);
         let mut revert = savepoint.revert.lock();
-        self.apply_inner(&revert, view.id, emit_lsp_notification);
+        self.apply_inner(&revert, ApplySource::View(view.id), emit_lsp_notification);
         *revert = Transaction::new(self.text()).with_selection(self.selection(view.id).clone());
         self.savepoints.push(savepoint_ref)
     }
 
     fn earlier_later_impl(&mut self, view: &mut View, uk: UndoKind, earlier: bool) -> bool {
+        if self.process.is_some() {
+            return false;
+        }
+
         if earlier {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -1683,7 +1712,7 @@ impl Document {
         };
         let mut success = false;
         for txn in txns {
-            if self.apply_impl(&txn, view.id, true) {
+            if self.apply_impl(&txn, ApplySource::View(view.id), true) {
                 success = true;
             }
         }
@@ -1708,7 +1737,7 @@ impl Document {
 
     /// Commit pending changes to history
     pub fn append_changes_to_history(&mut self, view: &mut View) {
-        if self.changes.is_empty() {
+        if self.changes.is_empty() || self.process.is_some() {
             return;
         }
 
@@ -2300,6 +2329,12 @@ pub struct ViewData {
     view_position: ViewPosition,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ApplySource {
+    View(ViewId),
+    Process,
+}
+
 #[derive(Clone, Debug)]
 pub enum FormatterError {
     SpawningFailed {
@@ -2353,7 +2388,7 @@ mod test {
         let transaction =
             Transaction::change(doc.text(), vec![(5, 7, Some("\n".into()))].into_iter());
         let old_doc = doc.text().clone();
-        doc.apply(&transaction, view);
+        doc.apply(&transaction, ApplySource::View(view));
         let changes = Client::changeset_to_changes(
             &old_doc,
             doc.text(),
@@ -2393,7 +2428,7 @@ mod test {
 
         let transaction = Transaction::insert(doc.text(), doc.selection(view), " world".into());
         let old_doc = doc.text().clone();
-        doc.apply(&transaction, view);
+        doc.apply(&transaction, ApplySource::View(view));
         let changes = Client::changeset_to_changes(
             &old_doc,
             doc.text(),
@@ -2417,7 +2452,7 @@ mod test {
 
         let transaction = transaction.invert(&old_doc);
         let old_doc = doc.text().clone();
-        doc.apply(&transaction, view);
+        doc.apply(&transaction, ApplySource::View(view));
         let changes = Client::changeset_to_changes(
             &old_doc,
             doc.text(),
@@ -2454,7 +2489,7 @@ mod test {
         );
         // aeilou
         let old_doc = doc.text().clone();
-        doc.apply(&transaction, view);
+        doc.apply(&transaction, ApplySource::View(view));
         let changes = Client::changeset_to_changes(
             &old_doc,
             doc.text(),

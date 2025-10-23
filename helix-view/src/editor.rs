@@ -2,7 +2,8 @@ use crate::{
     annotations::diagnostics::{DiagnosticFilter, InlineDiagnosticsConfig},
     clipboard::ClipboardProvider,
     document::{
-        DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
+        ApplySource, DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode,
+        SavePoint,
     },
     events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost},
     graphics::{CursorKind, Rect},
@@ -31,10 +32,13 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
     path::{Path, PathBuf},
     pin::Pin,
+    process::Stdio,
     sync::Arc,
 };
 
 use tokio::{
+    io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _},
+    process::Command,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::{sleep, Duration, Instant, Sleep},
 };
@@ -49,7 +53,7 @@ use helix_core::{
         self,
         config::{AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap},
     },
-    Change, LineEnding, Position, Range, Selection, Uri, NATIVE_LINE_ENDING,
+    Change, LineEnding, Position, Range, Selection, Transaction, Uri, NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
@@ -61,6 +65,8 @@ use arc_swap::{
     access::{DynAccess, DynGuard},
     ArcSwap,
 };
+
+use vte::{Parser, Perform};
 
 pub const DEFAULT_AUTO_SAVE_DELAY: u64 = 3000;
 
@@ -1219,6 +1225,8 @@ pub struct Editor {
 
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
+
+    pub command_queue: SelectAll<UnboundedReceiverStream<(DocumentId, EscapeCommand)>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1231,6 +1239,7 @@ pub enum EditorEvent {
     DebuggerEvent((DebugAdapterId, dap::Payload)),
     IdleTimer,
     Redraw,
+    ReceiveStdout,
 }
 
 #[derive(Debug, Clone)]
@@ -1259,6 +1268,11 @@ pub enum CompleteAction {
     },
 }
 
+pub enum EscapeCommand {
+    Print(char),
+    Execute(u8),
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum Action {
     Load,
@@ -1282,6 +1296,12 @@ pub enum CloseError {
     BufferModified(String),
     /// Document failed to save
     SaveError(anyhow::Error),
+}
+
+pub enum AttachProcessError {
+    AlreadyAttached,
+    InvalidArgs,
+    CannotSpawn(io::Error),
 }
 
 impl Editor {
@@ -1340,6 +1360,7 @@ impl Editor {
             handlers,
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
+            command_queue: SelectAll::new(),
         }
     }
 
@@ -1734,7 +1755,8 @@ impl Editor {
                     && !self
                         .tree
                         .traverse()
-                        .any(|(_, v)| v.doc == doc.id && v.id != view.id);
+                        .any(|(_, v)| v.doc == doc.id && v.id != view.id)
+                    && doc.process.is_none();
 
                 let (view, doc) = current!(self);
                 let view_id = view.id;
@@ -1862,7 +1884,7 @@ impl Editor {
         let transaction =
             helix_core::Transaction::insert(doc.text(), doc.selection(view.id), stdin.into())
                 .with_selection(Selection::point(0));
-        doc.apply(&transaction, view.id);
+        doc.apply(&transaction, ApplySource::View(view.id));
         doc.append_changes_to_history(view);
         Ok(doc_id)
     }
@@ -1998,6 +2020,99 @@ impl Editor {
         helix_event::dispatch(DocumentDidClose { editor: self, doc });
 
         Ok(())
+    }
+
+    pub fn attach_process(
+        &mut self,
+        doc_id: DocumentId,
+        mut args: impl Iterator<Item = String>,
+    ) -> Result<(), AttachProcessError> {
+        let doc = &mut self.documents.get_mut(&doc_id).unwrap();
+
+        if doc.process.is_some() {
+            return Err(AttachProcessError::AlreadyAttached);
+        }
+
+        let Some(program) = args.next() else {
+            return Err(AttachProcessError::InvalidArgs);
+        };
+
+        let mut command = Command::new(program);
+
+        for arg in args {
+            command.arg(arg);
+        }
+
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(AttachProcessError::CannotSpawn)?;
+
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (input_sender, mut input_receiver) = unbounded_channel();
+        let (command_sender, command_receiver) = unbounded_channel();
+        doc.process = Option::Some((child, input_sender));
+
+        self.command_queue
+            .push(UnboundedReceiverStream::new(command_receiver));
+
+        tokio::spawn(async move {
+            while let Some(c) = input_receiver.recv().await {
+                let mut b = [0; 4];
+                let s = c.encode_utf8(&mut b);
+
+                if stdin.write_all(s.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        fn spawn_performer<R: AsyncRead + Send + Unpin + 'static>(
+            mut reader: R,
+            doc_id: DocumentId,
+            sender: UnboundedSender<(DocumentId, EscapeCommand)>,
+        ) {
+            tokio::spawn(async move {
+                struct SendingPerformer {
+                    doc_id: DocumentId,
+                    sender: UnboundedSender<(DocumentId, EscapeCommand)>,
+                }
+
+                impl Perform for SendingPerformer {
+                    fn print(&mut self, c: char) {
+                        let _ = self.sender.send((self.doc_id, EscapeCommand::Print(c)));
+                    }
+
+                    fn execute(&mut self, byte: u8) {
+                        let _ = self
+                            .sender
+                            .send((self.doc_id, EscapeCommand::Execute(byte)));
+                    }
+                }
+
+                let mut input = Vec::new();
+                let mut parser = Parser::new();
+                let mut performer = SendingPerformer { doc_id, sender };
+
+                loop {
+                    if reader.read_buf(&mut input).await.is_err() {
+                        break;
+                    }
+
+                    parser.advance(&mut performer, &input);
+                    input.clear();
+                }
+            });
+        }
+
+        spawn_performer(stdout, doc_id, command_sender.clone());
+        spawn_performer(stderr, doc_id, command_sender);
+        Result::Ok(())
     }
 
     pub fn save<P: Into<PathBuf>>(
@@ -2266,6 +2381,38 @@ impl Editor {
                 _ = &mut self.idle_timer  => {
                     return EditorEvent::IdleTimer
                 }
+
+                Some((doc_id, command)) = self.command_queue.next() => {
+                    if let Some(doc) = self.documents.get_mut(&doc_id) {
+                        if let Some(view_id) = doc.selections().keys().nth(0) {
+                            match command {
+                                EscapeCommand::Print(c) => {
+                                    let text = doc.text();
+                                    let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
+                                    doc.apply(&transaction, ApplySource::View(*view_id));
+                                }
+                                EscapeCommand::Execute(b) => {
+                                    match b {
+                                        0x07 => {
+                                            let text = doc.text();
+                                            let transaction = Transaction::delete(text, [(text.len_chars() - 1, text.len_chars())].into_iter());
+                                            doc.apply(&transaction, ApplySource::View(*view_id));
+                                        }
+                                        0x0A | 0x0D => {
+                                            let text = doc.text();
+                                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), "\n".into());
+                                            doc.apply(&transaction, ApplySource::View(*view_id));
+                                        },
+                                        _ => {},
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+
+                    return EditorEvent::ReceiveStdout;
+                }
             }
         }
     }
@@ -2395,7 +2542,7 @@ fn try_restore_indent(doc: &mut Document, view: &mut View) {
                 let line_start_pos = text.line_to_char(range.cursor_line(text));
                 (line_start_pos, pos, None)
             });
-        doc.apply(&transaction, view.id);
+        doc.apply(&transaction, ApplySource::View(view.id));
     }
 }
 

@@ -678,6 +678,7 @@ impl Application {
                     return true;
                 }
             }
+            EditorEvent::ReceiveStdout => {}
         }
 
         false
