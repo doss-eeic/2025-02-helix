@@ -1,3 +1,4 @@
+use ::parking_lot::Mutex;
 use anyhow::{anyhow, bail, Error};
 use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
@@ -14,29 +15,11 @@ use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
 use helix_event::TaskController;
+use helix_loader::grammar::get_language;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
 use once_cell::sync::OnceCell;
-use thiserror;
-
-use crate::{
-    editor::Config,
-    events::{DocumentDidChange, SelectionDidChange},
-    expansion,
-    view::ViewPosition,
-    DocumentId, Editor, Theme, View, ViewId,
-};
-use ::parking_lot::Mutex;
-use helix_core::{
-    editor_config::EditorConfig,
-    encoding,
-    history::{History, State, UndoKind},
-    indent::{auto_detect_indent_style, IndentStyle},
-    line_ending::auto_detect_line_ending,
-    syntax::{self, config::LanguageConfiguration},
-    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
-};
 use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
@@ -49,6 +32,26 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
+use thiserror;
+
+use helix_core::{
+    editor_config::EditorConfig,
+    encoding,
+    history::{History, State, UndoKind},
+    indent::{auto_detect_indent_style, IndentStyle},
+    line_ending::auto_detect_line_ending,
+    syntax::{self, config::LanguageConfiguration},
+    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
+};
+
+use crate::{
+    editor::Config,
+    events::{DocumentDidChange, SelectionDidChange},
+    expansion,
+    view::ViewPosition,
+    DocumentId, Editor, Theme, View, ViewId,
+};
+
 /// 8kB of buffer space for encoding and decoding `Rope`s.
 const BUF_SIZE: usize = 8192;
 
@@ -685,7 +688,7 @@ use helix_core::diagnostic::DiagnosticTag;
 use helix_core::diagnostic::Range as DiagRange;
 use helix_core::diagnostic::Severity;
 use helix_core::spell_check::SpellChecker;
-use helix_core::tree_sitter;
+use helix_core::tree_sitter::{self, Query};
 use serde_json::json;
 
 impl Document {
@@ -2307,6 +2310,9 @@ impl Document {
 
         let tree = syntax.tree();
         let root = tree.root_node();
+        //let grammar : Grammar = get_language(self.language_name());
+        //let source : &str =
+        //let query: Query = Query::new(grammar,source,|_, _| Ok(()))?
 
         let mut keep: Vec<Diagnostic> = self
             .diagnostics()
@@ -2335,7 +2341,8 @@ impl Document {
             let kind = node.kind();
             log::warn!("{kind}");
 
-            if kind == "identifier" {
+            if true {
+                //kind == "identifier" {
                 let br = node.byte_range();
                 let slice = self
                     .text
@@ -2359,7 +2366,7 @@ impl Document {
                         },
                         line,
                         message: format!("Possibly misspelled word. Suggestion: {}", sug),
-                        severity: Some(Severity::Error),
+                        severity: Some(Severity::Warning),
                         code: None,
                         tags: vec![DiagnosticTag::Deprecated],
                         source: Some("spellcheck".to_string()),
