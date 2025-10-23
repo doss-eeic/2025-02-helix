@@ -1063,6 +1063,12 @@ fn align_selections(cx: &mut Context) {
     use helix_core::visual_coords_at_pos;
 
     let (view, doc) = current!(cx.editor);
+
+    if doc.process.is_some() {
+        cx.editor.set_error("cannot edit a buffer for a terminal");
+        return;
+    }
+
     let text = doc.text().slice(..);
     let selection = doc.selection(view.id);
 
@@ -1699,6 +1705,13 @@ fn repeat_last_motion(cx: &mut Context) {
 }
 
 fn replace(cx: &mut Context) {
+    let (_, doc) = current_ref!(cx.editor);
+
+    if doc.process.is_some() {
+        cx.editor.set_error("cannot edit a buffer for a terminal");
+        return;
+    }
+
     let mut buf = [0u8; 4]; // To hold utf8 encoded char.
 
     // need to wait for next key
@@ -1748,6 +1761,12 @@ where
     F: Fn(RopeSlice) -> Tendril,
 {
     let (view, doc) = current!(cx.editor);
+
+    if doc.process.is_some() {
+        cx.editor.set_error("cannot edit a buffer for a terminal");
+        return;
+    }
+
     let selection = doc.selection(view.id);
     let transaction = Transaction::change_by_selection(doc.text(), selection, |range| {
         let text: Tendril = change_fn(range.slice(doc.text().slice(..)));
@@ -2874,6 +2893,11 @@ enum YankAction {
 fn delete_selection_impl(cx: &mut Context, op: Operation, yank: YankAction) {
     let (view, doc) = current!(cx.editor);
 
+    if doc.process.is_some() {
+        cx.editor.set_error("cannot edit a buffer for a terminal");
+        return;
+    }
+
     let selection = doc.selection(view.id);
     let only_whole_lines = selection_is_linewise(selection, doc.text());
 
@@ -2917,6 +2941,12 @@ fn delete_by_selection_insert_mode(
     direction: Direction,
 ) {
     let (view, doc) = current!(cx.editor);
+
+    if doc.process.is_some() {
+        cx.editor.set_error("cannot edit a buffer for a terminal");
+        return;
+    }
+
     let text = doc.text().slice(..);
     let mut selection = SmallVec::new();
     let mut insert_newline = false;
