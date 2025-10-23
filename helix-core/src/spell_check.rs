@@ -1,10 +1,10 @@
 use spellbook::{Dictionary, ParseDictionaryError};
 
-pub struct SpellEngine {
+pub struct SpellChecker {
     dict: Dictionary,
 }
 
-impl SpellEngine {
+impl SpellChecker {
     pub fn new(aff: &str, dic: &str) -> Result<Self, ParseDictionaryError> {
         let dict = Dictionary::new(aff, dic)?;
         Ok(Self { dict })

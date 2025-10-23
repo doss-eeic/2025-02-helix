@@ -68,7 +68,7 @@ pub enum DiagnosticProvider {
         /// not clear the pull diagnostics and vice-versa.
         identifier: Option<Arc<str>>,
     },
-    SpellCheck,
+    SpellChecker,
     // Future internal features can go here...
 }
 

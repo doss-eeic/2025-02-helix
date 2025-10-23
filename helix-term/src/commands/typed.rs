@@ -17,6 +17,12 @@ use helix_view::expansion;
 use serde_json::Value;
 use ui::completers::{self, Completer};
 
+//spellchecker
+use crate::compositor;
+use crate::ui;
+use anyhow::Result;
+use helix_core::command_line;
+
 #[derive(Clone)]
 pub struct TypableCommand {
     pub name: &'static str,
@@ -2678,22 +2684,17 @@ fn noop(_cx: &mut compositor::Context, _args: Args, _event: PromptEvent) -> anyh
     Ok(())
 }
 
-//spellchecker
-
-use crate::args;
-use crate::compositor;
-use crate::ui;
-use anyhow::Result;
-use helix_core::command_line;
-
-pub fn command_spellcheck(
+pub fn spell_check(
     cx: &mut compositor::Context,
     _args: command_line::Args,
-    _event: ui::prompt::PromptEvent,
+    event: ui::prompt::PromptEvent,
 ) -> Result<()> {
+    if !matches!(event, PromptEvent::Validate) {
+        return Ok(());
+    }
     let (view, doc) = current!(cx.editor);
-    doc.run_spellcheck();
-    cx.editor.set_status("Running spellcheck...");
+    doc.check_spell();
+    cx.editor.set_status("Spellcheck completed");
     Ok(())
 }
 
@@ -3748,10 +3749,10 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
-        name: "spellcheck",
+        name: "spell-check",
         aliases: &[],
         doc: "Spell Checker",
-        fun: command_spellcheck,
+        fun: spell_check,
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, None),

@@ -20,7 +20,23 @@ use helix_vcs::{DiffHandle, DiffProviderRegistry};
 use once_cell::sync::OnceCell;
 use thiserror;
 
+use crate::{
+    editor::Config,
+    events::{DocumentDidChange, SelectionDidChange},
+    expansion,
+    view::ViewPosition,
+    DocumentId, Editor, Theme, View, ViewId,
+};
 use ::parking_lot::Mutex;
+use helix_core::{
+    editor_config::EditorConfig,
+    encoding,
+    history::{History, State, UndoKind},
+    indent::{auto_detect_indent_style, IndentStyle},
+    line_ending::auto_detect_line_ending,
+    syntax::{self, config::LanguageConfiguration},
+    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
+};
 use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
@@ -33,24 +49,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
-
-use crate::{
-    editor::Config,
-    events::{DocumentDidChange, SelectionDidChange},
-    expansion,
-    view::ViewPosition,
-    DocumentId, Editor, Theme, View, ViewId,
-};
-use helix_core::{
-    editor_config::EditorConfig,
-    encoding,
-    history::{History, State, UndoKind},
-    indent::{auto_detect_indent_style, IndentStyle},
-    line_ending::auto_detect_line_ending,
-    syntax::{self, config::LanguageConfiguration},
-    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
-};
-
 /// 8kB of buffer space for encoding and decoding `Rope`s.
 const BUF_SIZE: usize = 8192;
 
@@ -686,7 +684,7 @@ use url::Url;
 use helix_core::diagnostic::DiagnosticTag;
 use helix_core::diagnostic::Range as DiagRange;
 use helix_core::diagnostic::Severity;
-use helix_core::spellchecker::SpellEngine;
+use helix_core::spell_check::SpellChecker;
 use helix_core::tree_sitter;
 use serde_json::json;
 
@@ -2302,9 +2300,7 @@ impl Document {
         self.language_servers_with_feature(feature).next().is_some()
     }
 
-    //spellchecker
-
-    pub fn run_spellcheck(&mut self) {
+    pub fn check_spell(&mut self) {
         let Some(syntax) = &self.syntax else {
             return;
         };
@@ -2321,7 +2317,7 @@ impl Document {
 
         let aff = std::fs::read_to_string("./runtime/dicts/en/index.aff").unwrap();
         let dic = std::fs::read_to_string("./runtime/dicts/en/index.dic").unwrap();
-        let spell = helix_core::spellchecker::SpellEngine::new(&aff, &dic)
+        let spell = helix_core::spell_check::SpellChecker::new(&aff, &dic)
             .expect("failed to parse dictionary");
         let mut spell_diags = Vec::new();
 
@@ -2371,7 +2367,7 @@ impl Document {
                             "suggestions": [sug],
                             "lang": "en-US"
                         })),
-                        provider: DiagnosticProvider::SpellCheck,
+                        provider: DiagnosticProvider::SpellChecker,
                         ends_at_word: true,
                         starts_at_word: true,
                         zero_width: false,

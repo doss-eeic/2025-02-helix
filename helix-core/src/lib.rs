@@ -25,6 +25,7 @@ mod position;
 pub mod search;
 pub mod selection;
 pub mod snippets;
+pub mod spell_check;
 pub mod surround;
 pub mod syntax;
 pub mod test;
@@ -33,9 +34,6 @@ pub mod textobject;
 mod transaction;
 pub mod uri;
 pub mod wrap;
-
-//spellchecker
-pub mod spellchecker;
 
 pub mod unicode {
     pub use unicode_general_category as category;
