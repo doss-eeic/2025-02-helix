@@ -24,7 +24,7 @@ use helix_core::{
 };
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
-    document::{Mode, SCRATCH_BUFFER_NAME},
+    document::{ApplySource, Mode, SCRATCH_BUFFER_NAME},
     editor::{CompleteAction, CursorShapeConfig},
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
@@ -992,7 +992,7 @@ impl EditorView {
                                         (shift_position(start), shift_position(end), t)
                                     }),
                                 );
-                                doc.apply(&tx, view.id);
+                                doc.apply(&tx, ApplySource::View(view.id));
                             }
                             InsertEvent::TriggerCompletion => {
                                 last_savepoint = take(&mut last_request_savepoint);
@@ -1074,7 +1074,10 @@ impl EditorView {
                         if let Some(c) = key.char() {
                             let (view, doc) = current!(cx.editor);
                             if let Some(snippet) = &doc.active_snippet {
-                                doc.apply(&snippet.delete_placeholder(doc.text()), view.id);
+                                doc.apply(
+                                    &snippet.delete_placeholder(doc.text()),
+                                    ApplySource::View(view.id),
+                                );
                             }
                             commands::insert::insert_char(cx, c);
                         }

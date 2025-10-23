@@ -9,6 +9,7 @@ use crate::{
 use helix_core::snippets::{ActiveSnippet, RenderedSnippet, Snippet};
 use helix_core::{self as core, chars, fuzzy::MATCHER, Change, Transaction};
 use helix_lsp::{lsp, util, OffsetEncoding};
+use helix_view::document::ApplySource;
 use helix_view::{
     editor::CompleteAction,
     handlers::lsp::SignatureHelpInvoked,
@@ -191,10 +192,10 @@ impl Completion {
                                 trigger_offset,
                                 replace_mode,
                             );
-                            doc.apply_temporary(&transaction, view.id)
+                            doc.apply_temporary(&transaction, ApplySource::View(view.id))
                         }
                         CompletionItem::Other(core::CompletionItem { transaction, .. }) => {
-                            doc.apply_temporary(transaction, view.id)
+                            doc.apply_temporary(transaction, ApplySource::View(view.id))
                         }
                     };
                 }
@@ -250,7 +251,7 @@ impl Completion {
                         }
                     };
 
-                    doc.apply(&transaction, view.id);
+                    doc.apply(&transaction, ApplySource::View(view.id));
                     let placeholder = snippet.is_some();
                     if let Some(snippet) = snippet {
                         doc.active_snippet = match doc.active_snippet.take() {
@@ -273,7 +274,7 @@ impl Completion {
                                 additional_edits,
                                 offset_encoding, // TODO: should probably transcode in Client
                             );
-                            doc.apply(&transaction, view.id);
+                            doc.apply(&transaction, ApplySource::View(view.id));
                         }
                     }
                     // we could have just inserted a trigger char (like a `crate::` completion for rust
