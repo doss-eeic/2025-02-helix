@@ -220,7 +220,7 @@ pub struct Document {
     // `ArcSwap` directly.
     syn_loader: Arc<ArcSwap<syntax::Loader>>,
 
-    pub process: Option<(Child, UnboundedSender<char>)>,
+    pub process: Option<Process>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -340,6 +340,11 @@ impl Editor {
             doc.relative_path.take();
         }
     }
+}
+
+pub struct Process {
+    pub child: Child,
+    pub event_sender: UnboundedSender<char>,
 }
 
 enum Encoder {

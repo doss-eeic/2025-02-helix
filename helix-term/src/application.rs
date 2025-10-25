@@ -678,7 +678,7 @@ impl Application {
                     return true;
                 }
             }
-            EditorEvent::ReceiveStdout => {}
+            EditorEvent::VteAction => {}
         }
 
         false
