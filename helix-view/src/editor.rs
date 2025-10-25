@@ -2,7 +2,8 @@ use crate::{
     annotations::diagnostics::{DiagnosticFilter, InlineDiagnosticsConfig},
     clipboard::ClipboardProvider,
     document::{
-        DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
+        DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, Process,
+        SavePoint,
     },
     events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost},
     graphics::{CursorKind, Rect},
@@ -1225,7 +1226,7 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
 
-    pub command_queue: SelectAll<UnboundedReceiverStream<(DocumentId, EscapeCommand)>>,
+    pub vte_action_queue: SelectAll<UnboundedReceiverStream<(DocumentId, VteAction)>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1238,7 +1239,7 @@ pub enum EditorEvent {
     DebuggerEvent((DebugAdapterId, dap::Payload)),
     IdleTimer,
     Redraw,
-    ReceiveStdout,
+    VteAction,
 }
 
 #[derive(Debug, Clone)]
@@ -1267,7 +1268,7 @@ pub enum CompleteAction {
     },
 }
 
-pub enum EscapeCommand {
+pub enum VteAction {
     Print(char),
     Execute(u8),
 }
@@ -1359,7 +1360,7 @@ impl Editor {
             handlers,
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
-            command_queue: SelectAll::new(),
+            vte_action_queue: SelectAll::new(),
         }
     }
 
@@ -2036,7 +2037,7 @@ impl Editor {
             return Err(AttachProcessError::InvalidArgs);
         };
 
-        let mut command = Command::new(program);
+        let mut command = Command::new(&program);
 
         for arg in args {
             command.arg(arg);
@@ -2053,15 +2054,19 @@ impl Editor {
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        let (input_sender, mut input_receiver) = unbounded_channel();
-        let (command_sender, command_receiver) = unbounded_channel();
-        doc.process = Option::Some((child, input_sender));
+        let (event_sender, mut event_receiver) = unbounded_channel();
+        let (vte_action_sender, vte_action_receiver) = unbounded_channel();
 
-        self.command_queue
-            .push(UnboundedReceiverStream::new(command_receiver));
+        doc.process = Option::Some(Process {
+            child,
+            event_sender,
+        });
+
+        self.vte_action_queue
+            .push(UnboundedReceiverStream::new(vte_action_receiver));
 
         tokio::spawn(async move {
-            while let Some(c) = input_receiver.recv().await {
+            while let Some(c) = event_receiver.recv().await {
                 let mut b = [0; 4];
                 let s = c.encode_utf8(&mut b);
 
@@ -2071,47 +2076,58 @@ impl Editor {
             }
         });
 
-        fn spawn_performer<R: AsyncRead + Send + Unpin + 'static>(
-            mut reader: R,
-            doc_id: DocumentId,
-            sender: UnboundedSender<(DocumentId, EscapeCommand)>,
-        ) {
-            tokio::spawn(async move {
-                struct SendingPerformer {
-                    doc_id: DocumentId,
-                    sender: UnboundedSender<(DocumentId, EscapeCommand)>,
-                }
+        tokio::spawn(SendingPerformer::new(doc_id, vte_action_sender.clone()).run(stdout));
+        tokio::spawn(SendingPerformer::new(doc_id, vte_action_sender).run(stderr));
+        Result::Ok(())
+    }
 
-                impl Perform for SendingPerformer {
-                    fn print(&mut self, c: char) {
-                        let _ = self.sender.send((self.doc_id, EscapeCommand::Print(c)));
-                    }
-
-                    fn execute(&mut self, byte: u8) {
-                        let _ = self
-                            .sender
-                            .send((self.doc_id, EscapeCommand::Execute(byte)));
-                    }
-                }
-
-                let mut input = Vec::new();
-                let mut parser = Parser::new();
-                let mut performer = SendingPerformer { doc_id, sender };
-
-                loop {
-                    if reader.read_buf(&mut input).await.is_err() {
-                        break;
-                    }
-
-                    parser.advance(&mut performer, &input);
-                    input.clear();
-                }
-            });
+    fn handle_vte_action(&mut self, doc_id: DocumentId, action: VteAction) -> Option<EditorEvent> {
+        if !self.documents.contains_key(&doc_id) {
+            return None;
         }
 
-        spawn_performer(stdout, doc_id, command_sender.clone());
-        spawn_performer(stderr, doc_id, command_sender);
-        Result::Ok(())
+        let view_id = self.get_synced_view_id(doc_id);
+        let doc = doc_mut!(self, &doc_id);
+
+        match action {
+            VteAction::Print(c) => {
+                let text = doc.text();
+
+                let transaction = Transaction::insert(
+                    text,
+                    &Selection::single(text.len_chars(), text.len_chars()),
+                    format!("{c}").into(),
+                );
+
+                doc.apply(&transaction, view_id);
+            }
+            VteAction::Execute(b) => match b {
+                0x07 => {
+                    let text = doc.text();
+
+                    let transaction = Transaction::delete(
+                        text,
+                        [(text.len_chars() - 1, text.len_chars())].into_iter(),
+                    );
+
+                    doc.apply(&transaction, view_id);
+                }
+                0x0A | 0x0D => {
+                    let text = doc.text();
+
+                    let transaction = Transaction::insert(
+                        text,
+                        &Selection::single(text.len_chars(), text.len_chars()),
+                        "\n".into(),
+                    );
+
+                    doc.apply(&transaction, view_id);
+                }
+                _ => {}
+            },
+        }
+
+        Some(EditorEvent::VteAction)
     }
 
     pub fn save<P: Into<PathBuf>>(
@@ -2381,38 +2397,11 @@ impl Editor {
                     return EditorEvent::IdleTimer
                 }
 
-                Some((doc_id, command)) = self.command_queue.next() => {
-                    if !self.documents.contains_key(&doc_id) {
-                        continue;
+                Some((doc_id, action)) = self.vte_action_queue.next() => {
+                    match self.handle_vte_action(doc_id, action) {
+                        Some(event) => return event,
+                        None => continue,
                     }
-
-                    let view_id = self.get_synced_view_id(doc_id);
-                    let doc = doc_mut!(self, &doc_id);
-
-                    match command {
-                        EscapeCommand::Print(c) => {
-                            let text = doc.text();
-                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
-                            doc.apply(&transaction, view_id);
-                        }
-                        EscapeCommand::Execute(b) => {
-                            match b {
-                                0x07 => {
-                                    let text = doc.text();
-                                    let transaction = Transaction::delete(text, [(text.len_chars() - 1, text.len_chars())].into_iter());
-                                    doc.apply(&transaction, view_id);
-                                }
-                                0x0A | 0x0D => {
-                                    let text = doc.text();
-                                    let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), "\n".into());
-                                    doc.apply(&transaction, view_id);
-                                },
-                                _ => {},
-                            }
-                        }
-                    }
-
-                    return EditorEvent::ReceiveStdout;
                 }
             }
         }
@@ -2569,5 +2558,55 @@ impl CursorCache {
 
     pub fn reset(&self) {
         self.0.set(None)
+    }
+}
+
+struct SendingPerformer {
+    doc_id: DocumentId,
+    sender: UnboundedSender<(DocumentId, VteAction)>,
+    closed: bool,
+}
+
+impl SendingPerformer {
+    fn new(doc_id: DocumentId, sender: UnboundedSender<(DocumentId, VteAction)>) -> Self {
+        Self {
+            doc_id,
+            sender,
+            closed: false,
+        }
+    }
+
+    fn send(&mut self, action: VteAction) {
+        if self.sender.send((self.doc_id, action)).is_err() {
+            self.closed = true;
+        }
+    }
+
+    async fn run<R: AsyncRead + Send + Unpin + 'static>(mut self, mut reader: R) {
+        let mut input = Vec::new();
+        let mut parser = Parser::new();
+
+        loop {
+            if reader.read_buf(&mut input).await.is_err() {
+                break;
+            }
+
+            parser.advance(&mut self, &input);
+            input.clear();
+
+            if self.closed {
+                break;
+            }
+        }
+    }
+}
+
+impl Perform for SendingPerformer {
+    fn print(&mut self, c: char) {
+        self.send(VteAction::Print(c));
+    }
+
+    fn execute(&mut self, byte: u8) {
+        self.send(VteAction::Execute(byte));
     }
 }
