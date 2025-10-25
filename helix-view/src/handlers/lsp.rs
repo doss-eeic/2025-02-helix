@@ -2,7 +2,6 @@ use std::collections::btree_map::Entry;
 use std::collections::HashSet;
 use std::fmt::Display;
 
-use crate::document::ApplySource;
 use crate::editor::Action;
 use crate::events::{
     DiagnosticsDidChange, DocumentDidChange, DocumentDidClose, LanguageServerInitialized,
@@ -126,7 +125,7 @@ impl Editor {
 
         let transaction = generate_transaction_from_edits(doc.text(), text_edits, offset_encoding);
         let view = view_mut!(self, view_id);
-        doc.apply(&transaction, ApplySource::View(view.id));
+        doc.apply(&transaction, view.id);
         doc.append_changes_to_history(view);
         Ok(())
     }
