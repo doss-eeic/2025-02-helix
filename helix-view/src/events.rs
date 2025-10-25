@@ -2,7 +2,7 @@ use helix_core::{ChangeSet, Rope};
 use helix_event::events;
 use helix_lsp::LanguageServerId;
 
-use crate::{document::ApplySource, editor::Config, Document, DocumentId, Editor, ViewId};
+use crate::{editor::Config, Document, DocumentId, Editor, ViewId};
 
 events! {
     DocumentDidOpen<'a> {
@@ -11,7 +11,7 @@ events! {
     }
     DocumentDidChange<'a> {
         doc: &'a mut Document,
-        source: ApplySource,
+        view: ViewId,
         old_text: &'a Rope,
         changes: &'a ChangeSet,
         ghost_transaction: bool

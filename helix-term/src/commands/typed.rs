@@ -11,7 +11,7 @@ use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
-use helix_view::document::{read_to_string, ApplySource, DEFAULT_LANGUAGE_NAME};
+use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{AttachProcessError, CloseError, ConfigEvent};
 use helix_view::expansion;
 use serde_json::Value;
@@ -447,7 +447,7 @@ fn trim_trailing_whitespace(doc: &mut Document, view_id: ViewId) {
             }
         }),
     );
-    doc.apply(&transaction, ApplySource::View(view_id));
+    doc.apply(&transaction, view_id);
 }
 
 /// Trim any extra line-endings after the final line-ending.
@@ -467,7 +467,7 @@ fn trim_final_newlines(doc: &mut Document, view_id: ViewId) {
             rope,
             [(rope.len_chars() - chars_to_delete, rope.len_chars())].into_iter(),
         );
-        doc.apply(&transaction, ApplySource::View(view_id));
+        doc.apply(&transaction, view_id);
     }
 }
 
@@ -477,7 +477,7 @@ fn insert_final_newline(doc: &mut Document, view_id: ViewId) {
     if text.len_chars() > 0 && line_ending::get_line_ending(&text.slice(..)).is_none() {
         let eof = Selection::point(text.len_chars());
         let insert = Transaction::insert(text, &eof, doc.line_ending.as_str().into());
-        doc.apply(&insert, ApplySource::View(view_id));
+        doc.apply(&insert, view_id);
     }
 }
 
@@ -695,7 +695,7 @@ fn set_line_ending(
             }
         }),
     );
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
 
     Ok(())
@@ -2244,7 +2244,7 @@ fn sort(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
             .map(|(s, fragment)| (s.from(), s.to(), Some(fragment))),
     );
 
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
     view.ensure_cursor_in_view(doc, scrolloff);
 
@@ -2279,7 +2279,7 @@ fn reflow(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyho
         (range.from(), range.to(), Some(reflowed_text))
     });
 
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
     view.ensure_cursor_in_view(doc, scrolloff);
 
@@ -2501,7 +2501,7 @@ fn reset_diff_change(
     }
 
     drop(diff); // make borrow check happy
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
     view.ensure_cursor_in_view(doc, scrolloff);
     cx.editor.set_status(format!(
@@ -2650,7 +2650,7 @@ fn read(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
     let contents = Tendril::from(contents);
     let selection = doc.selection(view.id);
     let transaction = Transaction::insert(doc.text(), selection, contents);
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
     view.ensure_cursor_in_view(doc, scrolloff);
 
@@ -2686,7 +2686,7 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
     let doc_id = cx.editor.new_file(Action::Replace);
     let (view, doc) = current!(cx.editor);
     let transaction = Transaction::delete(doc.text(), [(0, doc.text().len_chars())].into_iter());
-    doc.apply(&transaction, ApplySource::View(view.id));
+    doc.apply(&transaction, view.id);
 
     if let Err(error) = cx
         .editor
