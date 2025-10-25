@@ -2,8 +2,7 @@ use crate::{
     annotations::diagnostics::{DiagnosticFilter, InlineDiagnosticsConfig},
     clipboard::ClipboardProvider,
     document::{
-        ApplySource, DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode,
-        SavePoint,
+        DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
     },
     events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost},
     graphics::{CursorKind, Rect},
@@ -1884,7 +1883,7 @@ impl Editor {
         let transaction =
             helix_core::Transaction::insert(doc.text(), doc.selection(view.id), stdin.into())
                 .with_selection(Selection::point(0));
-        doc.apply(&transaction, ApplySource::View(view.id));
+        doc.apply(&transaction, view.id);
         doc.append_changes_to_history(view);
         Ok(doc_id)
     }
@@ -2383,33 +2382,35 @@ impl Editor {
                 }
 
                 Some((doc_id, command)) = self.command_queue.next() => {
-                    if let Some(doc) = self.documents.get_mut(&doc_id) {
-                        if let Some(view_id) = doc.selections().keys().nth(0) {
-                            match command {
-                                EscapeCommand::Print(c) => {
+                    if !self.documents.contains_key(&doc_id) {
+                        continue;
+                    }
+
+                    let view_id = self.get_synced_view_id(doc_id);
+                    let doc = doc_mut!(self, &doc_id);
+
+                    match command {
+                        EscapeCommand::Print(c) => {
+                            let text = doc.text();
+                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
+                            doc.apply(&transaction, view_id);
+                        }
+                        EscapeCommand::Execute(b) => {
+                            match b {
+                                0x07 => {
                                     let text = doc.text();
-                                    let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), format!("{c}").into());
-                                    doc.apply(&transaction, ApplySource::View(*view_id));
+                                    let transaction = Transaction::delete(text, [(text.len_chars() - 1, text.len_chars())].into_iter());
+                                    doc.apply(&transaction, view_id);
                                 }
-                                EscapeCommand::Execute(b) => {
-                                    match b {
-                                        0x07 => {
-                                            let text = doc.text();
-                                            let transaction = Transaction::delete(text, [(text.len_chars() - 1, text.len_chars())].into_iter());
-                                            doc.apply(&transaction, ApplySource::View(*view_id));
-                                        }
-                                        0x0A | 0x0D => {
-                                            let text = doc.text();
-                                            let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), "\n".into());
-                                            doc.apply(&transaction, ApplySource::View(*view_id));
-                                        },
-                                        _ => {},
-                                    }
-                                }
+                                0x0A | 0x0D => {
+                                    let text = doc.text();
+                                    let transaction = Transaction::insert(text, &Selection::single(text.len_chars(), text.len_chars()), "\n".into());
+                                    doc.apply(&transaction, view_id);
+                                },
+                                _ => {},
                             }
                         }
                     }
-
 
                     return EditorEvent::ReceiveStdout;
                 }
@@ -2542,7 +2543,7 @@ fn try_restore_indent(doc: &mut Document, view: &mut View) {
                 let line_start_pos = text.line_to_char(range.cursor_line(text));
                 (line_start_pos, pos, None)
             });
-        doc.apply(&transaction, ApplySource::View(view.id));
+        doc.apply(&transaction, view.id);
     }
 }
 
