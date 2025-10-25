@@ -1460,9 +1460,9 @@ impl Component for EditorView {
 
                                 let (_, doc) = current_ref!(cx.editor);
 
-                                if let Some((_, stdin)) = &doc.process {
+                                if let Some(process) = &doc.process {
                                     if let Some(c) = key.inputed_char() {
-                                        _ = stdin.send(c);
+                                        _ = process.event_sender.send(c);
                                     }
                                 }
                             }
