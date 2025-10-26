@@ -52,7 +52,7 @@ use helix_core::{
         self,
         config::{AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap},
     },
-    Change, LineEnding, Position, Range, Selection, Transaction, Uri, NATIVE_LINE_ENDING,
+    Change, LineEnding, Position, Range, Selection, Tendril, Transaction, Uri, NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
@@ -2045,7 +2045,7 @@ impl Editor {
             command.arg(arg);
         }
 
-        let mut child = command
+        let mut handle = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -2053,12 +2053,12 @@ impl Editor {
             .spawn()
             .map_err(AttachProcessError::CannotSpawn)?;
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
+        let mut stdin = handle.stdin.take().unwrap();
+        let stdout = handle.stdout.take().unwrap();
+        let stderr = handle.stderr.take().unwrap();
         let (event_sender, mut event_receiver) = unbounded_channel();
         let (vte_action_sender, vte_action_receiver) = unbounded_channel();
-        doc.attach_process(child, event_sender);
+        doc.attach_process(handle, event_sender);
 
         self.vte_action_queue
             .push(UnboundedReceiverStream::new(vte_action_receiver));
@@ -2086,40 +2086,29 @@ impl Editor {
 
         match action {
             VteAction::Print(c) => {
+                let mut tendril = Tendril::new();
+                tendril.push(c);
                 let text = doc.text();
 
-                let transaction = Transaction::insert(
-                    text,
-                    &Selection::single(text.len_chars(), text.len_chars()),
-                    format!("{c}").into(),
-                );
+                let transaction =
+                    Transaction::insert(text, &Selection::point(text.len_chars()), tendril)
+                        .without_pending();
 
                 doc.apply(&transaction, view_id);
             }
-            VteAction::Execute(b) => match b {
-                0x07 => {
+            VteAction::Execute(b) => {
+                if b == 0x0A {
+                    let mut tendril = Tendril::new();
+                    tendril.push('\n');
                     let text = doc.text();
 
-                    let transaction = Transaction::delete(
-                        text,
-                        [(text.len_chars() - 1, text.len_chars())].into_iter(),
-                    );
+                    let transaction =
+                        Transaction::insert(text, &Selection::point(text.len_chars()), "\n".into())
+                            .without_pending();
 
                     doc.apply(&transaction, view_id);
                 }
-                0x0A | 0x0D => {
-                    let text = doc.text();
-
-                    let transaction = Transaction::insert(
-                        text,
-                        &Selection::single(text.len_chars(), text.len_chars()),
-                        "\n".into(),
-                    );
-
-                    doc.apply(&transaction, view_id);
-                }
-                _ => {}
-            },
+            }
         }
 
         Some(EditorEvent::VteAction)
