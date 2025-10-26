@@ -43,7 +43,7 @@ use helix_core::{
     line_ending::auto_detect_line_ending,
     syntax::{self, config::LanguageConfiguration},
     ChangeSet, Diagnostic, LineEnding, Operation, Range, Rope, RopeBuilder, Selection, Syntax,
-    Transaction,
+    Tendril, Transaction,
 };
 
 use crate::{
@@ -348,7 +348,7 @@ impl Editor {
 }
 
 pub struct Process {
-    pub child: Child,
+    pub handle: Child,
     pub event_sender: UnboundedSender<Event>,
     pub pending_chars: usize,
 }
@@ -1403,20 +1403,33 @@ impl Document {
 
         let changes = transaction.changes();
 
-        if let Some(process) = &self.process {
-            if match changes.changes().first() {
-                Some(Operation::Retain(n))
-                    if n + process.pending_chars >= self.text().len_chars() =>
-                {
-                    false
+        let about_pending = match &self.process {
+            Some(process) => match transaction.pending() {
+                true => {
+                    if match changes.changes().first() {
+                        Some(Operation::Retain(n))
+                            if n + process.pending_chars >= self.text().len_chars() =>
+                        {
+                            false
+                        }
+                        None => false,
+                        _ if self.text.len_chars() == 0 => false,
+                        _ => true,
+                    } {
+                        return false;
+                    }
+
+                    None
                 }
-                None => false,
-                _ if self.text.len_chars() == 0 => false,
-                _ => true,
-            } {
-                return false;
-            }
-        }
+                false => {
+                    let pending = self.pending_chars();
+                    let len = self.text.len_chars();
+                    let deletion = (len - pending.chars().count(), len);
+                    Some((deletion, pending))
+                }
+            },
+            None => None,
+        };
 
         let old_doc = self.text().clone();
 
@@ -1424,12 +1437,28 @@ impl Document {
             return false;
         }
 
+        if let Some((deletion, pending)) = about_pending {
+            Transaction::delete(&self.text, [deletion].into_iter())
+                .changes()
+                .apply(&mut self.text);
+
+            Transaction::insert(
+                &self.text,
+                &Selection::point(self.text.len_chars()),
+                pending,
+            )
+            .changes()
+            .apply(&mut self.text);
+        }
+
         if let Some(process) = &mut self.process {
-            for change in changes.changes() {
-                match change {
-                    Operation::Retain(_) => {}
-                    Operation::Delete(n) => process.pending_chars -= n,
-                    Operation::Insert(n) => process.pending_chars += n.chars().count(),
+            if transaction.pending() {
+                for change in changes.changes() {
+                    match change {
+                        Operation::Retain(_) => {}
+                        Operation::Delete(n) => process.pending_chars -= n,
+                        Operation::Insert(n) => process.pending_chars += n.chars().count(),
+                    }
                 }
             }
         }
@@ -2337,25 +2366,42 @@ impl Document {
         self.language_servers_with_feature(feature).next().is_some()
     }
 
-    pub fn attach_process(&mut self, child: Child, event_sender: UnboundedSender<Event>) {
+    pub fn attach_process(&mut self, handle: Child, event_sender: UnboundedSender<Event>) {
         self.process = Some(Process {
-            child,
+            handle,
             event_sender,
             pending_chars: 0,
         })
     }
 
-    pub fn flush_pending_chars(&mut self) -> bool {
-        let Some(process) = &self.process else {
-            return true;
+    pub fn pending_chars(&self) -> Tendril {
+        let mut tendril = Tendril::new();
+
+        if let Some(process) = &self.process {
+            let len = self.text.len_chars();
+            let slice = self.text.slice(len - process.pending_chars..len);
+
+            for s in slice.chunks() {
+                tendril.push_str(s);
+            }
         };
 
-        let pending_chars = process.pending_chars;
-        let len = self.text.len_chars();
-        let pending: String = self.text.slice(len - pending_chars..len).into();
+        tendril
+    }
+
+    pub fn flush_pending_chars(&mut self) -> bool {
+        if self.process.is_none() {
+            return true;
+        }
+
+        let pending = self.pending_chars();
         let process = self.process.as_mut().unwrap();
 
-        if process.event_sender.send(Event::Paste(pending)).is_err() {
+        if process
+            .event_sender
+            .send(Event::Paste(pending.into()))
+            .is_err()
+        {
             return false;
         }
 
