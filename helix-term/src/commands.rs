@@ -41,15 +41,15 @@ use helix_core::{
     text_annotations::{Overlay, TextAnnotations},
     textobject,
     unicode::width::UnicodeWidthChar,
-    visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
-    Selection, SmallVec, Syntax, Tendril, Transaction,
+    visual_offset_from_block, Assoc, Deletion, LineEnding, Position, Range, Rope, RopeReader,
+    RopeSlice, Selection, SmallVec, Syntax, Tendril, Transaction,
 };
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::Action,
     expansion,
     info::Info,
-    input::KeyEvent,
+    input::{Event, KeyEvent},
     keyboard::KeyCode,
     theme::Style,
     tree,
@@ -3034,7 +3034,10 @@ fn ensure_selections_forward(cx: &mut Context) {
 }
 
 fn enter_insert_mode(cx: &mut Context) {
-    cx.editor.mode = Mode::Insert;
+    cx.editor.mode = match doc!(cx.editor).process.is_none() {
+        true => Mode::Insert,
+        false => Mode::Terminal,
+    };
 }
 
 // inserts at the start of each selection
@@ -3504,7 +3507,7 @@ pub fn command_palette(cx: &mut Context) {
 
                     view.ensure_cursor_in_view(doc, config.scrolloff);
 
-                    if mode != Mode::Insert {
+                    if !matches!(mode, Mode::Insert | Mode::Terminal) {
                         doc.append_changes_to_history(view);
                     }
                 }
@@ -4191,7 +4194,19 @@ pub mod insert {
 
         let (view, doc) = current!(cx.editor);
         if let Some(t) = transaction {
+            let first_pending_char = doc.process.as_ref().map(|process| {
+                t.changes().map_pos(
+                    doc.text().len_chars() - process.pending_chars,
+                    Assoc::Before,
+                )
+            });
+
             doc.apply(&t, view.id);
+
+            if let Some(first_pending_char) = first_pending_char {
+                doc.process.as_mut().unwrap().pending_chars =
+                    doc.text().len_chars() - first_pending_char;
+            }
         }
 
         helix_event::dispatch(PostInsertChar { c, cx });
@@ -4288,6 +4303,7 @@ pub mod insert {
     }
 
     pub fn insert_newline(cx: &mut Context) {
+        cx.editor.set_status("insert newline");
         let config = cx.editor.config();
         let (view, doc) = current_ref!(cx.editor);
         let loader = cx.editor.syn_loader.load();
@@ -4433,7 +4449,33 @@ pub mod insert {
         transaction = transaction.with_selection(Selection::new(ranges, selection.primary_index()));
 
         let (view, doc) = current!(cx.editor);
+
+        let first_pending_char = doc.process.as_ref().map(|process| {
+            transaction.changes().map_pos(
+                doc.text().len_chars() - process.pending_chars,
+                Assoc::Before,
+            )
+        });
+
         doc.apply(&transaction, view.id);
+
+        if let Some(first_pending_char) = first_pending_char {
+            doc.process.as_mut().unwrap().pending_chars = 0;
+            let pending_chars = doc.text().len_chars() - first_pending_char;
+            let len = doc.text().len_chars();
+            let pending: String = doc.text().slice(len - pending_chars..len).into();
+
+            if doc
+                .process
+                .as_mut()
+                .unwrap()
+                .event_sender
+                .send(Event::Paste(pending))
+                .is_err()
+            {
+                cx.editor.set_error("cannot flush");
+            }
+        }
     }
 
     pub fn delete_char_backward(cx: &mut Context) {
@@ -4813,7 +4855,7 @@ fn paste_impl(
 pub(crate) fn paste_bracketed_value(cx: &mut Context, contents: String) {
     let count = cx.count();
     let paste = match cx.editor.mode {
-        Mode::Insert | Mode::Select => Paste::Cursor,
+        Mode::Insert | Mode::Select | Mode::Terminal => Paste::Cursor,
         Mode::Normal => Paste::Before,
     };
     let (view, doc) = current!(cx.editor);

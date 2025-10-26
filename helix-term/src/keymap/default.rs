@@ -404,9 +404,11 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "home" => goto_line_start,
         "end" => goto_line_end_newline,
     });
+    let terminal = insert.clone();
     hashmap!(
         Mode::Normal => normal,
         Mode::Select => select,
         Mode::Insert => insert,
+        Mode::Terminal => terminal,
     )
 }

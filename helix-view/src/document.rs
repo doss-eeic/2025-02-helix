@@ -49,6 +49,7 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
+    input::Event,
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -68,6 +69,7 @@ pub enum Mode {
     Normal = 0,
     Select = 1,
     Insert = 2,
+    Terminal = 3,
 }
 
 impl Display for Mode {
@@ -76,6 +78,7 @@ impl Display for Mode {
             Mode::Normal => f.write_str("normal"),
             Mode::Select => f.write_str("select"),
             Mode::Insert => f.write_str("insert"),
+            Mode::Terminal => f.write_str("terminal"),
         }
     }
 }
@@ -88,6 +91,7 @@ impl FromStr for Mode {
             "normal" => Ok(Mode::Normal),
             "select" => Ok(Mode::Select),
             "insert" => Ok(Mode::Insert),
+            "terminal" => Ok(Mode::Terminal),
             _ => bail!("Invalid mode '{}'", s),
         }
     }
@@ -344,7 +348,8 @@ impl Editor {
 
 pub struct Process {
     pub child: Child,
-    pub event_sender: UnboundedSender<char>,
+    pub event_sender: UnboundedSender<Event>,
+    pub pending_chars: usize,
 }
 
 enum Encoder {
@@ -1596,10 +1601,6 @@ impl Document {
     }
 
     fn undo_redo_impl(&mut self, view: &mut View, undo: bool) -> bool {
-        if self.process.is_some() {
-            return false;
-        }
-
         if undo {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -1685,10 +1686,6 @@ impl Document {
     }
 
     fn earlier_later_impl(&mut self, view: &mut View, uk: UndoKind, earlier: bool) -> bool {
-        if self.process.is_some() {
-            return false;
-        }
-
         if earlier {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
@@ -2310,6 +2307,14 @@ impl Document {
 
     pub fn has_language_server_with_feature(&self, feature: LanguageServerFeature) -> bool {
         self.language_servers_with_feature(feature).next().is_some()
+    }
+
+    pub fn attach_process(&mut self, child: Child, event_sender: UnboundedSender<Event>) {
+        self.process = Some(Process {
+            child,
+            event_sender,
+            pending_chars: 0,
+        })
     }
 }
 
