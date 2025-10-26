@@ -42,7 +42,8 @@ use helix_core::{
     indent::{auto_detect_indent_style, IndentStyle},
     line_ending::auto_detect_line_ending,
     syntax::{self, config::LanguageConfiguration},
-    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
+    ChangeSet, Diagnostic, LineEnding, Operation, Range, Rope, RopeBuilder, Selection, Syntax,
+    Transaction,
 };
 
 use crate::{
@@ -1400,10 +1401,37 @@ impl Document {
     ) -> bool {
         use helix_core::Assoc;
 
-        let old_doc = self.text().clone();
         let changes = transaction.changes();
+
+        if let Some(process) = &self.process {
+            if match changes.changes().first() {
+                Some(Operation::Retain(n))
+                    if n + process.pending_chars >= self.text().len_chars() =>
+                {
+                    false
+                }
+                None => false,
+                _ if self.text.len_chars() == 0 => false,
+                _ => true,
+            } {
+                return false;
+            }
+        }
+
+        let old_doc = self.text().clone();
+
         if !changes.apply(&mut self.text) {
             return false;
+        }
+
+        if let Some(process) = &mut self.process {
+            for change in changes.changes() {
+                match change {
+                    Operation::Retain(_) => {}
+                    Operation::Delete(n) => process.pending_chars -= n,
+                    Operation::Insert(n) => process.pending_chars += n.chars().count(),
+                }
+            }
         }
 
         if changes.is_empty() {
@@ -2315,6 +2343,24 @@ impl Document {
             event_sender,
             pending_chars: 0,
         })
+    }
+
+    pub fn flush_pending_chars(&mut self) -> bool {
+        let Some(process) = &self.process else {
+            return true;
+        };
+
+        let pending_chars = process.pending_chars;
+        let len = self.text.len_chars();
+        let pending: String = self.text.slice(len - pending_chars..len).into();
+        let process = self.process.as_mut().unwrap();
+
+        if process.event_sender.send(Event::Paste(pending)).is_err() {
+            return false;
+        }
+
+        process.pending_chars = 0;
+        true
     }
 }
 
