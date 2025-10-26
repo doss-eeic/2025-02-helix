@@ -41,15 +41,15 @@ use helix_core::{
     text_annotations::{Overlay, TextAnnotations},
     textobject,
     unicode::width::UnicodeWidthChar,
-    visual_offset_from_block, Assoc, Deletion, LineEnding, Position, Range, Rope, RopeReader,
-    RopeSlice, Selection, SmallVec, Syntax, Tendril, Transaction,
+    visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
+    Selection, SmallVec, Syntax, Tendril, Transaction,
 };
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::Action,
     expansion,
     info::Info,
-    input::{Event, KeyEvent},
+    input::KeyEvent,
     keyboard::KeyCode,
     theme::Style,
     tree,
@@ -4194,19 +4194,7 @@ pub mod insert {
 
         let (view, doc) = current!(cx.editor);
         if let Some(t) = transaction {
-            let first_pending_char = doc.process.as_ref().map(|process| {
-                t.changes().map_pos(
-                    doc.text().len_chars() - process.pending_chars,
-                    Assoc::Before,
-                )
-            });
-
             doc.apply(&t, view.id);
-
-            if let Some(first_pending_char) = first_pending_char {
-                doc.process.as_mut().unwrap().pending_chars =
-                    doc.text().len_chars() - first_pending_char;
-            }
         }
 
         helix_event::dispatch(PostInsertChar { c, cx });
@@ -4448,32 +4436,10 @@ pub mod insert {
         transaction = transaction.with_selection(Selection::new(ranges, selection.primary_index()));
 
         let (view, doc) = current!(cx.editor);
-
-        let first_pending_char = doc.process.as_ref().map(|process| {
-            transaction.changes().map_pos(
-                doc.text().len_chars() - process.pending_chars,
-                Assoc::Before,
-            )
-        });
-
         doc.apply(&transaction, view.id);
 
-        if let Some(first_pending_char) = first_pending_char {
-            doc.process.as_mut().unwrap().pending_chars = 0;
-            let pending_chars = doc.text().len_chars() - first_pending_char;
-            let len = doc.text().len_chars();
-            let pending: String = doc.text().slice(len - pending_chars..len).into();
-
-            if doc
-                .process
-                .as_mut()
-                .unwrap()
-                .event_sender
-                .send(Event::Paste(pending))
-                .is_err()
-            {
-                cx.editor.set_error("cannot flush");
-            }
+        if !doc.flush_pending_chars() {
+            cx.editor.set_error("cannot flush");
         }
     }
 
