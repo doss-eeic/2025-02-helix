@@ -493,6 +493,7 @@ impl EditorView {
             Mode::Insert => theme.find_highlight_exact("ui.cursor.insert"),
             Mode::Select => theme.find_highlight_exact("ui.cursor.select"),
             Mode::Normal => theme.find_highlight_exact("ui.cursor.normal"),
+            Mode::Terminal => theme.find_highlight_exact("ui.cursor.terminal"),
         }
         .unwrap_or(base_cursor_scope);
 
@@ -500,6 +501,7 @@ impl EditorView {
             Mode::Insert => theme.find_highlight_exact("ui.cursor.primary.insert"),
             Mode::Select => theme.find_highlight_exact("ui.cursor.primary.select"),
             Mode::Normal => theme.find_highlight_exact("ui.cursor.primary.normal"),
+            Mode::Terminal => theme.find_highlight_exact("ui.cursor.primary.terminal"),
         }
         .unwrap_or(base_primary_cursor_scope);
 
@@ -530,12 +532,14 @@ impl EditorView {
                 // Standard case.
                 let cursor_start = prev_grapheme_boundary(text, range.head);
                 // non block cursors look like they exclude the cursor
-                let selection_end =
-                    if selection_is_primary && !cursor_is_block && mode != Mode::Insert {
-                        range.head
-                    } else {
-                        cursor_start
-                    };
+                let selection_end = if selection_is_primary
+                    && !cursor_is_block
+                    && !matches!(mode, Mode::Insert | Mode::Terminal)
+                {
+                    range.head
+                } else {
+                    cursor_start
+                };
                 spans.push((selection_scope, range.anchor..selection_end));
                 // add block cursors
                 // skip primary cursor if terminal is unfocused - terminal cursor is used in that case
@@ -553,7 +557,8 @@ impl EditorView {
                 // non block cursors look like they exclude the cursor
                 let selection_start = if selection_is_primary
                     && !cursor_is_block
-                    && !(mode == Mode::Insert && cursor_end == range.anchor)
+                    && !(matches!(mode, Mode::Insert | Mode::Terminal)
+                        && cursor_end == range.anchor)
                 {
                     range.head
                 } else {
@@ -887,7 +892,7 @@ impl EditorView {
 
                 // HAXX: if we just entered insert mode from normal, clear key buf
                 // and record the command that got us into this mode.
-                if current_mode == Mode::Insert {
+                if matches!(current_mode, Mode::Insert | Mode::Terminal) {
                     // how we entered insert mode is important, and we should track that so
                     // we can repeat the side effect.
                     self.last_insert.0 = command.clone();
@@ -1383,7 +1388,7 @@ impl Component for EditorView {
 
                 // Store a history state if not in insert mode. Otherwise wait till we exit insert
                 // to include any edits to the paste in the history state.
-                if mode != Mode::Insert {
+                if !matches!(mode, Mode::Insert | Mode::Terminal) {
                     doc.append_changes_to_history(view);
                 }
 
@@ -1405,12 +1410,11 @@ impl Component for EditorView {
 
                 if !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key) {
                     match mode {
-                        Mode::Insert => {
+                        Mode::Insert | Mode::Terminal => {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
-                            let (_, doc) = current_ref!(cx.editor);
 
-                            if doc.process.is_none() {
+                            if mode == Mode::Insert {
                                 if let Some(completion) = &mut self.completion {
                                     let res = {
                                         // use a fake context here
@@ -1457,14 +1461,6 @@ impl Component for EditorView {
 
                                 // record last_insert key
                                 self.last_insert.1.push(InsertEvent::Key(key));
-
-                                let (_, doc) = current_ref!(cx.editor);
-
-                                if let Some(process) = &doc.process {
-                                    if let Some(c) = key.inputed_char() {
-                                        _ = process.event_sender.send(c);
-                                    }
-                                }
                             }
                         }
                         mode => self.command_mode(mode, &mut cx, key),
@@ -1494,7 +1490,7 @@ impl Component for EditorView {
 
                 // Store a history state if not in insert mode. This also takes care of
                 // committing changes when leaving insert mode.
-                if mode != Mode::Insert {
+                if !matches!(mode, Mode::Insert | Mode::Terminal) {
                     doc.append_changes_to_history(view);
                 }
                 let callback = if callbacks.is_empty() {
