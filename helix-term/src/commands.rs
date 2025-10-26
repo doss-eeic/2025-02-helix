@@ -4303,7 +4303,6 @@ pub mod insert {
     }
 
     pub fn insert_newline(cx: &mut Context) {
-        cx.editor.set_status("insert newline");
         let config = cx.editor.config();
         let (view, doc) = current_ref!(cx.editor);
         let loader = cx.editor.syn_loader.load();
