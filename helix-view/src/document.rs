@@ -689,7 +689,7 @@ use helix_core::diagnostic::DiagnosticTag;
 use helix_core::diagnostic::Range as DiagRange;
 use helix_core::diagnostic::Severity;
 use helix_core::spell_check::SpellChecker;
-use helix_core::tree_sitter::{self, Query};
+use helix_core::tree_sitter::{self, Grammar, Query, QueryCursor};
 use serde_json::json;
 
 impl Document {
@@ -2311,9 +2311,20 @@ impl Document {
 
         let tree = syntax.tree();
         let root = tree.root_node();
-        //let grammar : Grammar = get_language(self.language_name());
-        //let source : &str =
-        //let query: Query = Query::new(grammar,source,|_, _| Ok(()))?
+        let language_name = self.language_name();
+        let grammar: Grammar = match get_language("rust") {
+            Ok(Some(g)) => g,
+            _ => return,
+        };
+        let source: &str = "./runtime/queries/iex/identifier.scm";
+        let sc = std::fs::read_to_string(source).unwrap();
+        let query =
+            Query::new(grammar, &sc, |_, _| Ok(())).expect("Failed to compile tree-sitter query");
+
+        match language_name {
+            Some(i) => log::warn!("{i}"),
+            None => return,
+        };
 
         let mut keep: Vec<Diagnostic> = self
             .diagnostics()
@@ -2328,21 +2339,29 @@ impl Document {
             .expect("failed to parse dictionary");
         let mut spell_diags = Vec::new();
 
-        fn walk_tree<F>(node: &tree_sitter::Node, f: &mut F)
+        fn walk_tree<F>(node: &tree_sitter::Node, in_declaration: bool, f: &mut F)
         where
-            F: FnMut(tree_sitter::Node),
+            F: FnMut(tree_sitter::Node, bool),
         {
-            f(node.clone());
+            f(node.clone(), in_declaration);
+            let in_decl = in_declaration
+                || matches!(
+                    node.kind(),
+                    "let_declaration"
+                        | "func_declaration"
+                        | "use_declaration"
+                        | "field_declaration"
+                );
             for child in node.children() {
-                walk_tree(&child, f);
+                walk_tree(&child, in_decl, f);
             }
         }
 
-        walk_tree(&root, &mut |node| {
+        walk_tree(&root, false, &mut |node, in_decl| {
             let kind = node.kind();
-            log::warn!("{kind}");
 
-            if true {
+            if kind == "line_comment" || kind == "doc_comment" || (kind == "identifier" && in_decl)
+            {
                 //kind == "identifier" {
                 let br = node.byte_range();
                 let slice = self
@@ -2351,12 +2370,12 @@ impl Document {
                     .to_string();
 
                 //log::warn!("{slice}");
+                log::warn!("{kind}");
 
                 for (start, end, sug) in spell.check_text(&slice) {
                     let abs_start = br.start as usize + start;
                     let abs_end = br.start as usize + end;
 
-                    // 行番号の算出（0-based）
                     let start_char = self.text.byte_to_char(abs_start);
                     let line = self.text.char_to_line(start_char);
 
