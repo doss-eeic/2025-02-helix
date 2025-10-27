@@ -1403,7 +1403,7 @@ impl Document {
 
         let changes = transaction.changes();
 
-        let buffer_relocation = match &self.process {
+        let buffered_relocation = match &self.process {
             Some(process) => match transaction.ignore_buffer() {
                 true => {
                     let buffered = self.buffered_chars();
@@ -1437,7 +1437,7 @@ impl Document {
             return false;
         }
 
-        if let Some((deletion, buffered)) = buffer_relocation {
+        if let Some((deletion, buffered)) = buffered_relocation {
             Transaction::delete(&self.text, [deletion].into_iter())
                 .changes()
                 .apply(&mut self.text);
