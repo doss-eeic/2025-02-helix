@@ -531,7 +531,7 @@ impl ChangeSet {
 pub struct Transaction {
     changes: ChangeSet,
     selection: Option<Selection>,
-    pending: bool,
+    is_pended: bool,
 }
 
 impl Transaction {
@@ -540,7 +540,7 @@ impl Transaction {
         Self {
             changes: ChangeSet::new(doc.slice(..)),
             selection: None,
-            pending: true,
+            is_pended: true,
         }
     }
 
@@ -571,7 +571,7 @@ impl Transaction {
         Self {
             changes,
             selection: None,
-            pending: true,
+            is_pended: true,
         }
     }
 
@@ -760,12 +760,12 @@ impl Transaction {
         self.changes.changes_iter()
     }
 
-    pub fn pending(&self) -> bool {
-        self.pending
+    pub fn is_pended(&self) -> bool {
+        self.is_pended
     }
 
-    pub fn without_pending(mut self) -> Self {
-        self.pending = false;
+    pub fn set_not_pended(mut self) -> Self {
+        self.is_pended = false;
         self
     }
 }
@@ -775,7 +775,7 @@ impl From<ChangeSet> for Transaction {
         Self {
             changes,
             selection: None,
-            pending: true,
+            is_pended: true,
         }
     }
 }

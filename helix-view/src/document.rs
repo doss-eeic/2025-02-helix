@@ -1404,7 +1404,7 @@ impl Document {
         let changes = transaction.changes();
 
         let about_pending = match &self.process {
-            Some(process) => match transaction.pending() {
+            Some(process) => match transaction.is_pended() {
                 true => {
                     if match changes.changes().first() {
                         Some(Operation::Retain(n))
@@ -1452,7 +1452,7 @@ impl Document {
         }
 
         if let Some(process) = &mut self.process {
-            if transaction.pending() {
+            if transaction.is_pended() {
                 for change in changes.changes() {
                     match change {
                         Operation::Retain(_) => {}
