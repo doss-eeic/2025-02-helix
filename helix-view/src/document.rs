@@ -50,7 +50,6 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
-    input::Event,
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -349,7 +348,7 @@ impl Editor {
 
 pub struct Process {
     pub handle: Child,
-    pub event_sender: UnboundedSender<Event>,
+    pub event_sender: UnboundedSender<Tendril>,
     pub buffered_chars: usize,
 }
 
@@ -2366,7 +2365,7 @@ impl Document {
         self.language_servers_with_feature(feature).next().is_some()
     }
 
-    pub fn attach_process(&mut self, handle: Child, event_sender: UnboundedSender<Event>) {
+    pub fn attach_process(&mut self, handle: Child, event_sender: UnboundedSender<Tendril>) {
         self.process = Some(Process {
             handle,
             event_sender,
@@ -2397,11 +2396,7 @@ impl Document {
         let buffered = self.buffered_chars();
         let process = self.process.as_mut().unwrap();
 
-        if process
-            .event_sender
-            .send(Event::Paste(buffered.into()))
-            .is_err()
-        {
+        if process.event_sender.send(buffered).is_err() {
             return false;
         }
 

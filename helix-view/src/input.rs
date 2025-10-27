@@ -2,8 +2,7 @@
 use anyhow::{anyhow, Error};
 use helix_core::unicode::{segmentation::UnicodeSegmentation, width::UnicodeWidthStr};
 use serde::de::{self, Deserialize, Deserializer};
-use std::{fmt, io};
-use tokio::io::{AsyncWrite, AsyncWriteExt as _};
+use std::fmt;
 
 pub use crate::keyboard::{KeyCode, KeyModifiers, MediaKeyCode, ModifierKeyCode};
 
@@ -16,22 +15,6 @@ pub enum Event {
     Paste(String),
     Resize(u16, u16),
     IdleTimeout,
-}
-
-impl Event {
-    pub async fn write(&self, writer: &mut (impl AsyncWrite + Unpin)) -> io::Result<()> {
-        match self {
-            Self::Key(key) => {
-                key.write(writer).await?;
-            }
-            Self::Paste(s) => {
-                writer.write_all(s.as_bytes()).await?;
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, PartialOrd, PartialEq, Eq, Clone, Copy, Hash)]
@@ -117,75 +100,6 @@ impl KeyEvent {
         } else {
             s
         }
-    }
-
-    async fn write(&self, writer: &mut (impl AsyncWrite + Unpin)) -> io::Result<()> {
-        let esc = "\x1b".as_bytes();
-
-        match self.code {
-            KeyCode::Backspace => {
-                writer.write_all("\x08".as_bytes()).await?;
-            }
-            KeyCode::Enter => {
-                writer.write_all("\n".as_bytes()).await?;
-            }
-            KeyCode::Left => {
-                writer.write_all(esc).await?;
-                writer.write_all("[D".as_bytes()).await?;
-            }
-            KeyCode::Right => {
-                writer.write_all(esc).await?;
-                writer.write_all("[C".as_bytes()).await?;
-            }
-            KeyCode::Up => {
-                writer.write_all(esc).await?;
-                writer.write_all("[A".as_bytes()).await?;
-            }
-            KeyCode::Down => {
-                writer.write_all(esc).await?;
-                writer.write_all("[B".as_bytes()).await?;
-            }
-            KeyCode::Home => {
-                writer.write_all(esc).await?;
-                writer.write_all("[H".as_bytes()).await?;
-            }
-            KeyCode::End => {
-                writer.write_all(esc).await?;
-                writer.write_all("[F".as_bytes()).await?;
-            }
-            KeyCode::PageUp => {
-                writer.write_all(esc).await?;
-                writer.write_all("[5~".as_bytes()).await?;
-            }
-            KeyCode::PageDown => {
-                writer.write_all(esc).await?;
-                writer.write_all("[6~".as_bytes()).await?;
-            }
-            KeyCode::Tab => {
-                writer.write_all("\t".as_bytes()).await?;
-            }
-            KeyCode::Delete => {
-                writer.write_all(esc).await?;
-                writer.write_all("[3~".as_bytes()).await?;
-            }
-            KeyCode::Insert => {
-                writer.write_all(esc).await?;
-                writer.write_all("[2~".as_bytes()).await?;
-            }
-            KeyCode::F(_) => {}
-            KeyCode::Char(c) => {
-                let mut b = [0; 4];
-                let s = c.encode_utf8(&mut b);
-                writer.write_all(s.as_bytes()).await?;
-            }
-            KeyCode::Null => {}
-            KeyCode::Esc => {
-                writer.write_all(esc).await?;
-            }
-            _ => {}
-        };
-
-        Ok(())
     }
 }
 
