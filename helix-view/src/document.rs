@@ -1637,7 +1637,7 @@ impl Document {
 
         let success = self.apply_impl(transaction, view_id, emit_lsp_notification);
 
-        if !transaction.changes().is_empty() {
+        if success && !transaction.changes().is_empty() {
             // Compose this transaction with the previous one
             take_with(&mut self.changes, |changes| {
                 changes.compose(transaction.changes().clone())
