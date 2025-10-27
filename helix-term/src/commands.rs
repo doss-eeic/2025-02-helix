@@ -4408,7 +4408,7 @@ pub mod insert {
         let (view, doc) = current!(cx.editor);
         doc.apply(&transaction, view.id);
 
-        if !doc.flush_pending_chars() {
+        if !doc.flush_buffer() {
             cx.editor.set_error("cannot flush");
         }
     }

@@ -350,7 +350,7 @@ impl Editor {
 pub struct Process {
     pub handle: Child,
     pub event_sender: UnboundedSender<Event>,
-    pub pending_chars: usize,
+    pub buffered_chars: usize,
 }
 
 enum Encoder {
@@ -1403,12 +1403,12 @@ impl Document {
 
         let changes = transaction.changes();
 
-        let about_pending = match &self.process {
-            Some(process) => match transaction.is_pended() {
+        let buffer_relocation = match &self.process {
+            Some(process) => match transaction.is_for_buffer() {
                 true => {
                     if match changes.changes().first() {
                         Some(Operation::Retain(n))
-                            if n + process.pending_chars >= self.text().len_chars() =>
+                            if n + process.buffered_chars >= self.text().len_chars() =>
                         {
                             false
                         }
@@ -1422,10 +1422,10 @@ impl Document {
                     None
                 }
                 false => {
-                    let pending = self.pending_chars();
+                    let buffered = self.buffered_chars();
                     let len = self.text.len_chars();
-                    let deletion = (len - pending.chars().count(), len);
-                    Some((deletion, pending))
+                    let deletion = (len - buffered.chars().count(), len);
+                    Some((deletion, buffered))
                 }
             },
             None => None,
@@ -1437,7 +1437,7 @@ impl Document {
             return false;
         }
 
-        if let Some((deletion, pending)) = about_pending {
+        if let Some((deletion, buffered)) = buffer_relocation {
             Transaction::delete(&self.text, [deletion].into_iter())
                 .changes()
                 .apply(&mut self.text);
@@ -1445,19 +1445,19 @@ impl Document {
             Transaction::insert(
                 &self.text,
                 &Selection::point(self.text.len_chars()),
-                pending,
+                buffered,
             )
             .changes()
             .apply(&mut self.text);
         }
 
         if let Some(process) = &mut self.process {
-            if transaction.is_pended() {
+            if transaction.is_for_buffer() {
                 for change in changes.changes() {
                     match change {
                         Operation::Retain(_) => {}
-                        Operation::Delete(n) => process.pending_chars -= n,
-                        Operation::Insert(n) => process.pending_chars += n.chars().count(),
+                        Operation::Delete(n) => process.buffered_chars -= n,
+                        Operation::Insert(n) => process.buffered_chars += n.chars().count(),
                     }
                 }
             }
@@ -2370,16 +2370,16 @@ impl Document {
         self.process = Some(Process {
             handle,
             event_sender,
-            pending_chars: 0,
+            buffered_chars: 0,
         })
     }
 
-    pub fn pending_chars(&self) -> Tendril {
+    pub fn buffered_chars(&self) -> Tendril {
         let mut tendril = Tendril::new();
 
         if let Some(process) = &self.process {
             let len = self.text.len_chars();
-            let slice = self.text.slice(len - process.pending_chars..len);
+            let slice = self.text.slice(len - process.buffered_chars..len);
 
             for s in slice.chunks() {
                 tendril.push_str(s);
@@ -2389,23 +2389,23 @@ impl Document {
         tendril
     }
 
-    pub fn flush_pending_chars(&mut self) -> bool {
+    pub fn flush_buffer(&mut self) -> bool {
         if self.process.is_none() {
             return true;
         }
 
-        let pending = self.pending_chars();
+        let buffered = self.buffered_chars();
         let process = self.process.as_mut().unwrap();
 
         if process
             .event_sender
-            .send(Event::Paste(pending.into()))
+            .send(Event::Paste(buffered.into()))
             .is_err()
         {
             return false;
         }
 
-        process.pending_chars = 0;
+        process.buffered_chars = 0;
         true
     }
 }
