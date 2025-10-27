@@ -36,7 +36,7 @@ use std::{
 };
 
 use tokio::{
-    io::{AsyncRead, AsyncReadExt as _},
+    io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _},
     process::Command,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::{sleep, Duration, Instant, Sleep},
@@ -2067,8 +2067,8 @@ impl Editor {
             .push(UnboundedReceiverStream::new(vte_action_receiver));
 
         tokio::spawn(async move {
-            while let Some(event) = event_receiver.recv().await {
-                if event.write(&mut stdin).await.is_err() {
+            while let Some(tendril) = event_receiver.recv().await {
+                if stdin.write_all(tendril.as_bytes()).await.is_err() {
                     break;
                 }
             }
