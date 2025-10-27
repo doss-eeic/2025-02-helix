@@ -919,7 +919,7 @@ impl EditorView {
     }
 
     fn insert_mode(&mut self, cx: &mut commands::Context, event: KeyEvent) {
-        if let Some(keyresult) = self.handle_keymap_event(Mode::Insert, cx, event) {
+        if let Some(keyresult) = self.handle_keymap_event(cx.editor.mode, cx, event) {
             match keyresult {
                 KeymapResult::NotFound => {
                     if !self.on_next_key(OnKeyCallbackKind::Fallback, cx, event) {
