@@ -2092,7 +2092,7 @@ impl Editor {
 
                 let transaction =
                     Transaction::insert(text, &Selection::point(text.len_chars()), tendril)
-                        .set_not_pended();
+                        .ignore_buffer();
 
                 doc.apply(&transaction, view_id);
             }
@@ -2104,7 +2104,7 @@ impl Editor {
 
                     let transaction =
                         Transaction::insert(text, &Selection::point(text.len_chars()), "\n".into())
-                            .set_not_pended();
+                            .ignore_buffer();
 
                     doc.apply(&transaction, view_id);
                 }
