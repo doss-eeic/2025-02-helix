@@ -531,7 +531,7 @@ impl ChangeSet {
 pub struct Transaction {
     changes: ChangeSet,
     selection: Option<Selection>,
-    for_buffer: bool,
+    ignore_buffer: bool,
 }
 
 impl Transaction {
@@ -540,7 +540,7 @@ impl Transaction {
         Self {
             changes: ChangeSet::new(doc.slice(..)),
             selection: None,
-            for_buffer: true,
+            ignore_buffer: false,
         }
     }
 
@@ -571,7 +571,7 @@ impl Transaction {
         Self {
             changes,
             selection: None,
-            for_buffer: true,
+            ignore_buffer: false,
         }
     }
 
@@ -760,12 +760,12 @@ impl Transaction {
         self.changes.changes_iter()
     }
 
-    pub fn is_for_buffer(&self) -> bool {
-        self.for_buffer
+    pub fn ignore_buffer(&self) -> bool {
+        self.ignore_buffer
     }
 
-    pub fn ignore_buffer(mut self) -> Self {
-        self.for_buffer = false;
+    pub fn set_ignore_buffer(mut self) -> Self {
+        self.ignore_buffer = true;
         self
     }
 }
@@ -775,7 +775,7 @@ impl From<ChangeSet> for Transaction {
         Self {
             changes,
             selection: None,
-            for_buffer: true,
+            ignore_buffer: false,
         }
     }
 }
