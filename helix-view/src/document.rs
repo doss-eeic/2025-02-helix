@@ -1404,8 +1404,14 @@ impl Document {
         let changes = transaction.changes();
 
         let buffer_relocation = match &self.process {
-            Some(process) => match transaction.is_for_buffer() {
+            Some(process) => match transaction.ignore_buffer() {
                 true => {
+                    let buffered = self.buffered_chars();
+                    let len = self.text.len_chars();
+                    let deletion = (len - buffered.chars().count(), len);
+                    Some((deletion, buffered))
+                }
+                false => {
                     if match changes.changes().first() {
                         Some(Operation::Retain(n))
                             if n + process.buffered_chars >= self.text().len_chars() =>
@@ -1420,12 +1426,6 @@ impl Document {
                     }
 
                     None
-                }
-                false => {
-                    let buffered = self.buffered_chars();
-                    let len = self.text.len_chars();
-                    let deletion = (len - buffered.chars().count(), len);
-                    Some((deletion, buffered))
                 }
             },
             None => None,
@@ -1452,7 +1452,7 @@ impl Document {
         }
 
         if let Some(process) = &mut self.process {
-            if transaction.is_for_buffer() {
+            if !transaction.ignore_buffer() {
                 for change in changes.changes() {
                     match change {
                         Operation::Retain(_) => {}
