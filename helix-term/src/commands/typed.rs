@@ -2693,9 +2693,8 @@ fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
         .attach_process(doc_id, args.into_iter().map(Cow::into_owned))
     {
         match error {
-            AttachProcessError::AlreadyAttached => bail!("error process already attached"),
-            AttachProcessError::InvalidArgs => bail!("specify a program"),
-            AttachProcessError::CannotSpawn(error) => bail!("error: {error:?}"),
+            AttachProcessError::AlreadyAttached => bail!("process already attached"),
+            AttachProcessError::CannotSpawn(error) => bail!("{error}"),
         }
     }
 

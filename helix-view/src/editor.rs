@@ -26,7 +26,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     collections::{BTreeMap, HashMap, HashSet},
-    fs,
+    env, fs,
     io::{self, stdin},
     num::{NonZeroU8, NonZeroUsize},
     path::{Path, PathBuf},
@@ -1302,7 +1302,6 @@ pub enum CloseError {
 
 pub enum AttachProcessError {
     AlreadyAttached,
-    InvalidArgs,
     CannotSpawn(io::Error),
 }
 
@@ -2035,9 +2034,13 @@ impl Editor {
             return Err(AttachProcessError::AlreadyAttached);
         }
 
-        let Some(program) = args.next() else {
-            return Err(AttachProcessError::InvalidArgs);
-        };
+        let program = args.next().unwrap_or_else(|| {
+            if cfg!(target_os = "windows") {
+                String::from("powershell")
+            } else {
+                env::var("SHELL").unwrap()
+            }
+        });
 
         let mut command = Command::new(&program);
 
