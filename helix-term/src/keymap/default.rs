@@ -404,7 +404,10 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "home" => goto_line_start,
         "end" => goto_line_end_newline,
     });
-    let terminal = insert.clone();
+    let mut terminal = insert.clone();
+    terminal.merge_nodes(keymap!({ "Terminal mode"
+        "C-c" => kill_process,
+    }));
     hashmap!(
         Mode::Normal => normal,
         Mode::Select => select,

@@ -615,6 +615,7 @@ impl MappableCommand {
         goto_prev_tabstop, "Goto next snippet placeholder",
         rotate_selections_first, "Make the first selection your primary one",
         rotate_selections_last, "Make the last selection your primary one",
+        kill_process, "",
     );
 }
 
@@ -6954,5 +6955,13 @@ fn lsp_or_syntax_workspace_symbol_picker(cx: &mut Context) {
         lsp::workspace_symbol_picker(cx);
     } else {
         syntax_workspace_symbol_picker(cx);
+    }
+}
+
+fn kill_process(cx: &mut Context) {
+    doc_mut!(cx.editor).process = None;
+
+    if cx.editor.mode == Mode::Terminal {
+        cx.editor.mode = Mode::Insert;
     }
 }
