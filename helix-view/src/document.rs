@@ -8,13 +8,11 @@ use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
-use helix_core::editor_config;
 use helix_core::encoding::Encoding;
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
 use helix_event::TaskController;
-use helix_loader::grammar::get_language;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
@@ -702,8 +700,7 @@ use url::Url;
 use helix_core::diagnostic::DiagnosticTag;
 use helix_core::diagnostic::Range as DiagRange;
 use helix_core::diagnostic::Severity;
-use helix_core::spell_check::SpellChecker;
-use helix_core::tree_sitter::{self, Grammar, Query, QueryCursor};
+use helix_core::tree_sitter;
 use serde_json::json;
 
 impl Document {
@@ -2425,8 +2422,8 @@ impl Document {
         let mut keep: Vec<Diagnostic> = self
             .diagnostics()
             .iter()
+            .filter(|&d| d.source.as_deref() != Some("spellcheck"))
             .cloned()
-            .filter(|d| d.source.as_deref() != Some("spellcheck"))
             .collect();
 
         let aff = std::fs::read_to_string("./runtime/dicts/en/index.aff").unwrap();
