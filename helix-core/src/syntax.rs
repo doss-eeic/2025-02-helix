@@ -44,7 +44,6 @@ pub struct LanguageData {
     textobject_query: OnceCell<Option<TextObjectQuery>>,
     tag_query: OnceCell<Option<TagQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
-    spell_query: OnceCell<Option<SpellQuery>>,
 }
 
 impl LanguageData {
@@ -56,7 +55,6 @@ impl LanguageData {
             textobject_query: OnceCell::new(),
             tag_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
-            spell_query: OnceCell::new(),
         }
     }
 
@@ -1179,11 +1177,6 @@ impl RainbowQuery {
             query,
         })
     }
-}
-
-#[derive(Debug)]
-pub struct SpellQuery {
-    query: Query,
 }
 
 #[cfg(test)]

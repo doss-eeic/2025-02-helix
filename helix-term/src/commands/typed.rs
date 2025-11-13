@@ -2715,7 +2715,7 @@ pub fn spell_check(
     if !matches!(event, PromptEvent::Validate) {
         return Ok(());
     }
-    let (view, doc) = current!(cx.editor);
+    let doc = doc_mut!(cx.editor);
     doc.check_spell();
     cx.editor.set_status("Spellcheck completed");
     Ok(())
